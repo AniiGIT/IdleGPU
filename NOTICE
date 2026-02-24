@@ -1,0 +1,16 @@
+IdleGPU
+Copyright (C) 2026 AniiGIT
+
+This project is licensed under the GNU Affero General Public License v3.0.
+See the LICENSE file for the full license text.
+
+This software makes use of concepts and ideas from the following projects:
+
+  Cricket — CUDA API interception research
+  https://github.com/RWTH-AVC/cricket
+
+  rCUDA — Remote CUDA execution research
+  http://rcuda.net/
+
+IdleGPU is not affiliated with or endorsed by NVIDIA Corporation.
+CUDA, NVENC, and NVML are trademarks of NVIDIA Corporation.
