@@ -23,10 +23,9 @@ dependencies = [
     "uvicorn[standard]>=0.29",
 ]
 
-# CLI entry points added when agent/__main__.py and broker/__main__.py are implemented.
-# [project.scripts]
-# idlegpu-agent  = "agent.__main__:main"
-# idlegpu-broker = "broker.__main__:main"
+[project.scripts]
+idlegpu-agent  = "agent.__main__:main"
+idlegpu-broker = "broker.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

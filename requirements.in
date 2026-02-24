@@ -1,0 +1,20 @@
+# IdleGPU runtime dependencies - minimum version bounds (pip-tools source).
+# Edit this file to change version constraints, then regenerate requirements.txt with:
+#   pip freeze > requirements.txt
+# or, if using pip-tools:
+#   pip-compile requirements.in
+
+# GPU utilization via NVIDIA Management Library.
+# pip package renamed from pynvml to nvidia-ml-py in 2023;
+# the import name at runtime is still "pynvml".
+nvidia-ml-py>=12.0
+
+# CPU and RAM utilization.
+psutil>=5.9
+
+# Agent WebSocket connection to the broker.
+websockets>=12.0
+
+# Broker REST API and WebSocket server.
+fastapi>=0.110
+uvicorn[standard]>=0.29
