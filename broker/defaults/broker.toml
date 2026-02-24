@@ -1,0 +1,80 @@
+# IdleGPU Broker -- Default Configuration
+# =========================================
+#
+# This file was created automatically on first run.
+# Edit it to customise behaviour, then restart the broker for changes to take effect.
+#
+# Config file location:
+#   Linux:   /etc/idlegpu/broker.toml
+#   Windows: %PROGRAMDATA%\idlegpu\broker.toml
+#
+# IMPORTANT: Do NOT store TLS private keys in this file.
+# Private key files belong in the data directory with restricted permissions (600 on Linux).
+# See the installation guide for certificate setup.
+
+
+# ---------------------------------------------------------------------------
+# [server] -- Bind address and port
+#
+# The broker is a WebSocket + REST server that agents dial into.
+# Bind to 0.0.0.0 to accept connections from agents on your local network.
+# Bind to 127.0.0.1 to accept local connections only (useful for testing).
+# ---------------------------------------------------------------------------
+[server]
+
+# Address to bind on.
+# Use 0.0.0.0 to listen on all interfaces (default for LAN use).
+# Valid: any IPv4/IPv6 address or hostname.
+host = "0.0.0.0"
+
+# TCP port the broker listens on.
+# Agents must use the same port in their [broker] config.
+# Valid range: 1-65535
+port = 8765
+
+
+# ---------------------------------------------------------------------------
+# [tls] -- Mutual TLS certificate paths
+#
+# When these paths are set and the files exist, the broker starts in mTLS
+# mode (wss://) and requires agents to present a valid client certificate.
+#
+# When all three paths are absent or commented out, the broker starts in
+# plaintext mode (ws://). Only use plaintext on trusted local networks or
+# with --dev during development.
+#
+# Run `idlegpu-broker setup` to generate a local CA and broker certificate
+# automatically. Agents enroll with `idlegpu-agent enroll`.
+# ---------------------------------------------------------------------------
+[tls]
+
+# Path to the CA certificate PEM file.
+# Both the broker and enrolling agents must trust this CA.
+# ca_cert = "/var/lib/idlegpu/ca.crt"
+
+# Path to the broker's TLS certificate PEM file.
+# broker_cert = "/var/lib/idlegpu/broker.crt"
+
+# Path to the broker's TLS private key PEM file.
+# Must be readable only by the broker process (mode 600 on Linux).
+# broker_key = "/var/lib/idlegpu/broker.key"
+
+
+# ---------------------------------------------------------------------------
+# [data] -- Data directory
+#
+# The data directory stores generated certificates, the enrollment token,
+# and other runtime state created by `idlegpu-broker setup`.
+# ---------------------------------------------------------------------------
+[data]
+
+# Absolute path to the broker data directory.
+# The broker process must have read/write permission to this path.
+# The directory is created automatically if it does not exist.
+#
+# Platform defaults (used when this key is absent):
+#   Linux:   /var/lib/idlegpu
+#   Windows: %PROGRAMDATA%\idlegpu
+#
+# Uncomment and set to override:
+# data_dir = "/var/lib/idlegpu"

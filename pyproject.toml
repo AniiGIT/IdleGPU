@@ -16,11 +16,13 @@ dependencies = [
     "nvidia-ml-py>=12.0",
     # CPU and RAM utilization
     "psutil>=5.9",
-    # Agent WebSocket connection to broker (mTLS added in Phase 2)
+    # Agent WebSocket connection to broker
     "websockets>=12.0",
     # Broker REST API and WebSocket server; also used for agent dev status endpoint
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
+    # mTLS certificate generation and HMAC signing (Phase 2)
+    "cryptography>=42.0",
 ]
 
 [project.scripts]
@@ -32,5 +34,6 @@ where = ["."]
 include = ["agent*", "broker*"]
 
 [tool.setuptools.package-data]
-# Bundle the default config so importlib.resources can locate it at runtime.
+# Bundle default configs so importlib.resources can locate them at runtime.
 "agent.defaults" = ["*.toml"]
+"broker.defaults" = ["*.toml"]
