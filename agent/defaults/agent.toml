@@ -1,0 +1,92 @@
+# IdleGPU Agent — Default Configuration
+# =======================================
+#
+# This file was created automatically on first run.
+# Edit it to customise behaviour, then restart the agent for changes to take effect.
+#
+# Config file location:
+#   Linux:   /etc/idlegpu/agent.toml
+#   Windows: %PROGRAMDATA%\idlegpu\agent.toml
+#
+# IMPORTANT: Do NOT store secrets (TLS certificates, HMAC keys) in this file.
+# Credentials belong in the system keystore or a separate secrets file with
+# restricted permissions. See the installation guide for details.
+
+
+# ---------------------------------------------------------------------------
+# [idle] — Idle detection thresholds
+#
+# The agent considers the machine idle only when ALL THREE signals satisfy
+# their thresholds simultaneously. A single active signal keeps the GPU local.
+# ---------------------------------------------------------------------------
+[idle]
+
+# GPU utilization threshold (percent).
+# The GPU is considered idle when utilization is STRICTLY BELOW this value.
+# Set lower to be more conservative (GPU offered less often).
+# Set higher to tolerate background GPU activity (e.g. desktop compositor).
+# Valid range: 0–100
+gpu_threshold = 10
+
+# CPU utilization threshold (percent).
+# Averaged across all logical cores over the poll interval.
+# Valid range: 0–100
+cpu_threshold = 20
+
+# Input idle time threshold (seconds).
+# How long the keyboard and mouse must be silent before the machine is
+# considered idle. Measured by GetLastInputInfo (Windows) or xprintidle (Linux).
+# Only the elapsed-time integer is read — input content is never observed.
+# Default: 300 (5 minutes)
+# Valid range: 1–86400 (1 second to 24 hours)
+input_idle_seconds = 300
+
+# Poll interval while waiting for the machine to become idle (seconds).
+# The agent checks all three signals every N seconds. Slower polling uses
+# less CPU but takes longer to notice the machine has gone idle.
+# Valid range: must be a positive number
+poll_idle_seconds = 10
+
+# Poll interval while the GPU is being offered to the broker (seconds).
+# Checked every N seconds to detect user activity and reclaim the GPU.
+# Intentionally faster than poll_idle_seconds for prompt reclaim.
+# Valid range: must be a positive number
+poll_active_seconds = 3
+
+
+# ---------------------------------------------------------------------------
+# [broker] — Broker connection
+#
+# The agent always dials OUT to the broker. No inbound ports are opened
+# on the gaming PC.
+# ---------------------------------------------------------------------------
+[broker]
+
+# Hostname or IP address of the IdleGPU broker.
+# Can be a DNS name (broker.local), mDNS name (.local), or bare IP.
+host = "broker.local"
+
+# TCP port the broker listens on.
+# Valid range: 1–65535
+port = 443
+
+
+# ---------------------------------------------------------------------------
+# [logging] — Transparency log
+#
+# Every job the agent accepts is appended here with timestamp, source,
+# backend, and duration. This log is append-only and never truncated.
+# You always know exactly what your GPU was used for and for how long.
+# ---------------------------------------------------------------------------
+[logging]
+
+# Path to the transparency log file.
+# The agent process must have write permission to this path.
+# The parent directory is created automatically if it does not exist.
+#
+# Platform defaults (used when this key is absent):
+#   Linux:   /var/lib/idlegpu/transparency.log
+#   Windows: %PROGRAMDATA%\idlegpu\transparency.log
+#
+# Uncomment and set to override:
+# transparency_log = "/var/lib/idlegpu/transparency.log"
