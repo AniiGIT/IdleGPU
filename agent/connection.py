@@ -2,16 +2,23 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-agent/connection.py - Outbound WebSocket connection from agent to broker.
+agent/connection.py - Outbound WebSocket connections from agent to broker.
 
 The agent always dials out; it never opens an inbound port. This module
-owns the connection lifecycle: hello handshake, idle status updates,
-transparency logging, and reconnect with exponential backoff on failure.
+owns the connection lifecycle for both channels:
 
-Connects over wss:// (mTLS) when an ssl.SSLContext is supplied, or ws://
-in dev mode / when TLS is unconfigured.
+  Control channel  (JSON,   /ws/agent)
+    hello handshake, idle status updates, transparency logging, reconnect.
 
-Message protocol (JSON):
+  CUDA channel     (binary, /ws/cuda/{agent_id})
+    Opened when the system first goes idle; closed when it goes active.
+    Carries binary CUDA API call frames from the broker/sidecar.
+    See agent/cuda_channel.py and agent/frame.py for the frame format.
+
+Both channels connect over wss:// (mTLS) when an ssl.SSLContext is
+supplied, or ws:// in dev mode / when TLS is unconfigured.
+
+Control channel message protocol (JSON):
 
   Agent -> Broker:
     {"type": "hello",  "agent_id": "<uuid>", "hostname": "<name>"}
@@ -37,6 +44,7 @@ import websockets
 import websockets.exceptions
 
 from .config import AgentConfig
+from .cuda_channel import CudaChannel
 from .idle_monitor import is_system_idle, warmup_cpu
 from .transparency_log import Event, TransparencyLog
 
@@ -114,6 +122,7 @@ class BrokerConnection:
         self._ssl_ctx = ssl_ctx
         self._agent_id = _load_or_create_agent_id(data_dir)
         self._hostname = socket.gethostname()
+        self._cuda = CudaChannel(cfg, self._agent_id, ssl_ctx)
 
     async def run(self) -> None:
         """Connect to the broker and keep reconnecting on failure.
@@ -161,6 +170,9 @@ class BrokerConnection:
             try:
                 await self._idle_loop(ws)
             finally:
+                # Ensure the CUDA channel is closed whenever the control
+                # channel drops, regardless of the reason.
+                await self._cuda.close()
                 self._tlog.write(Event.DISCONNECTED, reason="connection_lost")
 
     async def _handshake(self, ws: websockets.WebSocketClientProtocol) -> None:  # type: ignore[name-defined]
@@ -185,7 +197,7 @@ class BrokerConnection:
             )
 
     async def _idle_loop(self, ws: websockets.WebSocketClientProtocol) -> None:  # type: ignore[name-defined]
-        """Poll idle state and stream status updates to the broker."""
+        """Poll idle state, stream status updates, and manage the CUDA channel."""
         warmup_cpu()
         was_idle = False
         cfg = self._cfg.idle
@@ -193,11 +205,14 @@ class BrokerConnection:
         while True:
             idle, input_secs, gpu_pct, cpu_pct = is_system_idle(cfg)
 
-            # Log transitions to the transparency log.
+            # Log transitions and open/close the CUDA channel accordingly.
             if idle and not was_idle:
                 self._tlog.write(Event.IDLE, input=f"{input_secs}s")
+                await self._cuda.open()
+
             elif not idle and was_idle:
                 self._tlog.write(Event.ACTIVE)
+                await self._cuda.close()
 
             was_idle = idle
 

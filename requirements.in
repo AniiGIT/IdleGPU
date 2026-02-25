@@ -25,3 +25,7 @@ cryptography>=42.0
 # TOML serialisation for writing [tls] paths back to config files after
 # `broker setup` and `agent enroll` (stdlib tomllib only reads, not writes).
 tomli-w>=1.0
+
+# Binary serialisation for the CUDA channel binary frame payload (Phase 2C).
+# The broker routes msgpack-encoded frames verbatim; agent and sidecar decode.
+msgpack>=1.0

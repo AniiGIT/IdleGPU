@@ -15,10 +15,20 @@ Two separate ASGI apps run on separate ports:
     before they have a client certificate for the mTLS main port.
 
   app  (mTLS when [tls] is configured, server.port):
-    GET  /status   - Connected agent list and metrics
-    WS   /ws/agent - Agent WebSocket session
+    GET  /status            - Connected agent list and metrics
+    WS   /ws/agent          - Agent control channel (JSON, idle status)
+    WS   /ws/cuda/{id}      - Agent CUDA channel (binary frames, msgpack)
+    WS   /ws/sidecar/{id}   - Sidecar CUDA channel (binary frames, msgpack)
 
-Agent WebSocket protocol (JSON messages):
+CUDA channel binary frame format (see broker/frame.py):
+
+  [4 bytes big-endian: msg_type] [4 bytes: call_id] [4 bytes: payload_len]
+  [payload_len bytes: msgpack dict]
+
+  The broker routes binary frames verbatim — it never decodes payload.
+  Frames flow: sidecar → broker → agent (calls), agent → broker → sidecar (returns).
+
+Agent control channel protocol (JSON messages):
 
   Agent -> Broker:
     {"type": "hello",  "agent_id": "<uuid>", "hostname": "<name>"}
@@ -46,12 +56,14 @@ from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSoc
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+from .cuda_router import CudaRouter
 from .registry import AgentRecord, AgentRegistry
 
 logger = logging.getLogger(__name__)
 
-# Module-level registry shared between the WebSocket handler and /status.
+# Module-level singletons shared between route handlers.
 registry = AgentRegistry()
+cuda_router = CudaRouter()
 
 app = FastAPI(
     title="IdleGPU Broker",
@@ -306,3 +318,44 @@ def _apply_status(agent_id: str, msg: dict) -> None:  # type: ignore[type-arg]
         cpu_pct=cpu_pct,
         input_secs=input_secs,
     )
+
+
+# ---------------------------------------------------------------------------
+# Agent CUDA channel WebSocket endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.websocket("/ws/cuda/{agent_id}")
+async def agent_cuda_websocket(websocket: WebSocket, agent_id: str) -> None:
+    """
+    Accept the agent's binary CUDA channel.
+
+    The agent opens this connection when it transitions to idle and holds it
+    open until it goes active again. While open, the broker pairs incoming
+    sidecar connections with this channel and relays binary CUDA frames
+    between them.
+
+    Binary frame format: see broker/frame.py.
+    """
+    await websocket.accept()
+    await cuda_router.handle_agent(agent_id, websocket)
+
+
+# ---------------------------------------------------------------------------
+# Sidecar CUDA channel WebSocket endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.websocket("/ws/sidecar/{agent_id}")
+async def sidecar_cuda_websocket(websocket: WebSocket, agent_id: str) -> None:
+    """
+    Accept a sidecar connection targeting a specific agent.
+
+    The sidecar connects here when it has CUDA work to forward to a specific
+    idle agent. The broker pairs the sidecar with the named agent's CUDA
+    channel and relays binary frames bidirectionally until either side closes.
+
+    Closes with code 4001 if the named agent has no idle CUDA channel.
+    """
+    await websocket.accept()
+    await cuda_router.handle_sidecar(agent_id, websocket)
