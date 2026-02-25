@@ -204,20 +204,22 @@ def generate_broker_cert(
     ca_cert_pem: bytes,
     ca_key_pem: bytes,
     hostname: str,
-) -> tuple[bytes, bytes]:
+) -> tuple[bytes, bytes, list[str]]:
     """
     Generate an ECDSA P-256 broker certificate signed by the local CA.
 
     The SAN extension includes:
     - The provided *hostname* as a DNSName entry.
+    - "localhost" as a DNSName entry (unless *hostname* is already "localhost"),
+      so local dev connections always work without hostname lookups.
     - All local IP addresses enumerated by _enumerate_local_ips() —
-      127.0.0.1, ::1, and every address resolved from the hostname and
-      the machine's own hostname via socket.getaddrinfo().
+      127.0.0.1, ::1, and every address bound to a local network interface.
 
     This ensures the cert is valid whether agents connect by hostname or
     by any local IP address (e.g. 192.168.x.x on a LAN).
 
-    Returns (cert_pem, key_pem) as bytes.
+    Returns (cert_pem, key_pem, san_display) where san_display is a list of
+    human-readable SAN entries (e.g. ["DNS:myhost", "DNS:localhost", "IP:127.0.0.1"]).
     """
     ca_cert = x509.load_pem_x509_certificate(ca_cert_pem)
     ca_key = serialization.load_pem_private_key(ca_key_pem, password=None)
@@ -226,11 +228,15 @@ def generate_broker_cert(
     now = _now()
 
     san: list[x509.GeneralName] = [x509.DNSName(hostname)]
+    if hostname != "localhost":
+        san.append(x509.DNSName("localhost"))
     san.extend(x509.IPAddress(addr) for addr in _enumerate_local_ips(hostname))
-    logger.debug(
-        "broker cert SAN: %s",
-        ", ".join(str(e.value) for e in san),
-    )
+
+    san_display = [
+        f"DNS:{e.value}" if isinstance(e, x509.DNSName) else f"IP:{e.value}"
+        for e in san
+    ]
+    logger.debug("broker cert SAN: %s", ", ".join(san_display))
 
     cert = (
         x509.CertificateBuilder()
@@ -250,7 +256,7 @@ def generate_broker_cert(
         .sign(ca_key, hashes.SHA256())
     )
 
-    return _cert_to_pem(cert), _key_to_pem(key)
+    return _cert_to_pem(cert), _key_to_pem(key), san_display
 
 
 # ---------------------------------------------------------------------------
@@ -365,18 +371,22 @@ def check_cert_expiry(cert_pem: bytes) -> int:
 # ---------------------------------------------------------------------------
 
 
-def setup(data_dir: Path, hostname: str) -> tuple[str, str, str, str, str]:
+def setup(data_dir: Path, hostname: str) -> tuple[str, str, str, str, str, list[str]]:
     """
     Generate CA, broker cert, and enrollment token; write everything to data_dir.
 
-    Returns (ca_cert_path, broker_cert_path, broker_key_path, token, fingerprint)
-    where fingerprint is the SHA-256 hex fingerprint of the CA cert for
-    out-of-band verification.
+    Returns (ca_cert_path, broker_cert_path, broker_key_path, token, fingerprint,
+    san_entries) where fingerprint is the SHA-256 hex fingerprint of the CA cert
+    for out-of-band verification, and san_entries is the list of SAN strings
+    (e.g. ["DNS:myhost", "DNS:localhost", "IP:192.168.1.10"]) embedded in the
+    broker cert so the operator can verify their IP and hostname are covered.
     """
     data_dir.mkdir(parents=True, exist_ok=True)
 
     ca_cert_pem, ca_key_pem = generate_ca()
-    broker_cert_pem, broker_key_pem = generate_broker_cert(ca_cert_pem, ca_key_pem, hostname)
+    broker_cert_pem, broker_key_pem, san_entries = generate_broker_cert(
+        ca_cert_pem, ca_key_pem, hostname
+    )
 
     ca_cert_path = data_dir / "ca.crt"
     ca_key_path = data_dir / "ca.key"
@@ -405,4 +415,5 @@ def setup(data_dir: Path, hostname: str) -> tuple[str, str, str, str, str]:
         str(broker_key_path),
         token,
         fingerprint,
+        san_entries,
     )

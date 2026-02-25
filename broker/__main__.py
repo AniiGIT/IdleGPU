@@ -126,7 +126,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
     print(f"  Data dir : {data_dir}")
     print()
 
-    ca_cert_path, broker_cert_path, broker_key_path, token, fingerprint = setup(
+    ca_cert_path, broker_cert_path, broker_key_path, token, fingerprint, san_entries = setup(
         data_dir, hostname
     )
 
@@ -143,6 +143,11 @@ def cmd_setup(args: argparse.Namespace) -> None:
 
     print("Certificates generated.")
     print(f"  Broker cert expires in {cert_days} days.")
+    print()
+    print("Broker cert Subject Alternative Names:")
+    for entry in san_entries:
+        print(f"  {entry}")
+    print("  Agents and sidecars may connect using any of the above.")
     print()
     print("CA fingerprint (SHA-256):")
     print(f"  {fingerprint}")
