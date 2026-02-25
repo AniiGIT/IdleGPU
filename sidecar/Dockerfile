@@ -13,6 +13,11 @@
 # Build arguments
 # ───────────────
 #   PYTHON_VERSION   Python version tag (default: 3.11-slim)
+#   UID              UID for the in-container idlegpu user (default: 1000).
+#                    Set to $(id -u) to match the host user that owns the
+#                    volume-mounted cert directory so file permissions align.
+#   GID              GID for the in-container idlegpu group (default: 1000).
+#                    Set to $(id -g) to match the host group.
 #
 # Runtime environment variables (all required except IDLEGPU_SOCKET)
 # ───────────────────────────────────────────────────────────────────
@@ -68,8 +73,13 @@ RUN pip install --no-cache-dir --no-deps -e .
 # Create the socket directory with appropriate permissions.
 RUN mkdir -p /var/run/idlegpu && chmod 0755 /var/run/idlegpu
 
-# Non-root user for the sidecar process.
-RUN useradd --system --no-create-home --shell /bin/false idlegpu \
+# Non-root user — UID/GID default to 1000; pass --build-arg UID=$(id -u)
+# GID=$(id -g) to match the host user that owns volume-mounted cert files.
+ARG UID=1000
+ARG GID=1000
+RUN groupadd --system --gid "${GID}" idlegpu \
+    && useradd --system --no-create-home --shell /bin/false \
+               --uid "${UID}" --gid "${GID}" idlegpu \
     && chown idlegpu:idlegpu /var/run/idlegpu
 
 USER idlegpu

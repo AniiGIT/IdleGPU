@@ -38,6 +38,12 @@ services:
     build:
       context: ..          # repo root (contains shim/ sidecar/ pyproject.toml)
       dockerfile: sidecar/Dockerfile
+      # Match the container UID/GID to the host user that owns cert files.
+      # Before building, export your IDs:
+      #   export UID=$(id -u) GID=$(id -g)
+      args:
+        UID: "${UID:-1000}"
+        GID: "${GID:-1000}"
     restart: unless-stopped
     environment:
       IDLEGPU_BROKER_HOST: "YOUR_BROKER_HOST"    # e.g. my-server.local
