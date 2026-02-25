@@ -6,12 +6,17 @@ broker/__main__.py - Entry point for the IdleGPU broker.
 
 Usage:
   idlegpu-broker setup  [--hostname HOST] [--data-dir DIR] [--config FILE] [--start]
+  idlegpu-broker token  [--hostname HOST] [--data-dir DIR] [--config FILE]
   idlegpu-broker start  [--host ADDR] [--port PORT] [--data-dir DIR] [--config FILE] [--dev]
 
 Commands:
   setup   Generate the local CA, broker certificate, and one-time enrollment
           token. Writes [tls] paths to broker.toml automatically.
           Pass --start to immediately start the broker when done.
+
+  token   Generate a new one-time enrollment token without regenerating
+          certificates. Use this to enroll additional agents or sidecars
+          after the initial setup.
 
   start   Load config and start the broker WebSocket + REST server.
           Runs until interrupted (Ctrl+C or SIGTERM).
@@ -170,6 +175,53 @@ def cmd_setup(args: argparse.Namespace) -> None:
         print("Starting broker (Ctrl+C to stop)...")
         print()
         cmd_start(argparse.Namespace(host=None, port=None, data_dir=args.data_dir, config=args.config, dev=False))
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: token
+# ---------------------------------------------------------------------------
+
+
+def cmd_token(args: argparse.Namespace) -> None:
+    """
+    Generate a new one-time enrollment token without regenerating certificates.
+
+    Overwrites any existing token file and prints enrollment commands for both
+    agents and sidecars. Use this to enroll additional nodes after the initial
+    `broker setup` run.
+    """
+    from .pki import create_enrollment_token  # noqa: PLC0415
+
+    cfg = load_config(path=Path(args.config) if args.config else None)
+
+    if args.data_dir is not None:
+        cfg.data.data_dir = args.data_dir
+
+    hostname = args.hostname or socket.gethostname()
+    data_dir = Path(cfg.data.data_dir)
+
+    # Sanity-check: certificates must exist or enrollment makes no sense.
+    if not (data_dir / "ca.crt").exists():
+        print(
+            f"error: CA certificate not found in {data_dir}. "
+            "Run `idlegpu-broker setup` first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    token = create_enrollment_token(data_dir)
+
+    print("One-time enrollment token:")
+    print(f"  {token}")
+    print()
+    print("Enroll each agent with:")
+    print(f"  idlegpu-agent enroll --broker {hostname} --token {token}")
+    print()
+    print("Enroll each sidecar with:")
+    print(f"  idlegpu-sidecar enroll --broker {hostname} --token {token}")
+    print()
+    print("The token is single-use. Run `idlegpu-broker token` again")
+    print("to generate a new token for the next enrollment.")
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +390,31 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Start the broker immediately after setup completes.",
     )
 
+    # token
+    p_token = sub.add_parser(
+        "token",
+        help="Generate a new enrollment token (certificates are not regenerated).",
+    )
+    p_token.add_argument(
+        "--hostname",
+        default=None,
+        metavar="HOST",
+        help="Broker hostname to print in the enroll commands (default: system hostname).",
+    )
+    p_token.add_argument(
+        "--data-dir",
+        default=None,
+        metavar="DIR",
+        dest="data_dir",
+        help="Data directory containing the token file (overrides broker.toml).",
+    )
+    p_token.add_argument(
+        "--config",
+        default=None,
+        metavar="FILE",
+        help="Explicit path to broker.toml (bypasses auto-discovery).",
+    )
+
     # start
     p_start = sub.add_parser(
         "start",
@@ -384,6 +461,7 @@ def main() -> None:
 
     dispatch = {
         "setup": cmd_setup,
+        "token": cmd_token,
         "start": cmd_start,
     }
 
