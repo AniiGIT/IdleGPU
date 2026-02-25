@@ -14,9 +14,12 @@ Environment variables
   IDLEGPU_BROKER_HOST   Broker hostname or IP
   IDLEGPU_BROKER_PORT   Broker mTLS port (default: 8765)
   IDLEGPU_AGENT_ID      Agent UUID to pair with
-  IDLEGPU_CA_CERT       Path to CA certificate PEM (optional; dev mode if absent)
-  IDLEGPU_SIDECAR_CERT  Path to sidecar client certificate PEM
-  IDLEGPU_SIDECAR_KEY   Path to sidecar client key PEM
+  IDLEGPU_CA_CERT       Path to CA certificate PEM.
+                        If set alone: one-way TLS (broker cert verified, no client cert).
+                        If set with the two keys below: mutual TLS (mTLS).
+                        If absent: plaintext ws:// (dev only).
+  IDLEGPU_SIDECAR_CERT  Path to sidecar client certificate PEM (mTLS only)
+  IDLEGPU_SIDECAR_KEY   Path to sidecar client key PEM (mTLS only)
   IDLEGPU_DEV           Set to "1" to use ws:// instead of wss://
 """
 
@@ -38,6 +41,12 @@ class TlsConfig:
 
     @property
     def enabled(self) -> bool:
+        """True when at least a CA cert is set (one-way TLS or mTLS)."""
+        return self.ca_cert is not None
+
+    @property
+    def mtls_enabled(self) -> bool:
+        """True when all three cert paths are set (mutual TLS)."""
         return all(p is not None for p in (self.ca_cert, self.sidecar_cert, self.sidecar_key))
 
 

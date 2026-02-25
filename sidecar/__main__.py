@@ -20,9 +20,9 @@ Required environment variables:
 Optional environment variables (see sidecar/config.py for full list):
   IDLEGPU_SOCKET        Unix socket path (default: /var/run/idlegpu/cuda.sock)
   IDLEGPU_BROKER_PORT   broker port (default: 8765)
-  IDLEGPU_CA_CERT       path to CA certificate PEM
-  IDLEGPU_SIDECAR_CERT  path to sidecar client certificate PEM
-  IDLEGPU_SIDECAR_KEY   path to sidecar client key PEM
+  IDLEGPU_CA_CERT       path to CA cert PEM; enables one-way TLS (broker verified)
+  IDLEGPU_SIDECAR_CERT  path to sidecar client cert PEM; required for mTLS
+  IDLEGPU_SIDECAR_KEY   path to sidecar client key PEM; required for mTLS
   IDLEGPU_DEV           set to "1" for plaintext ws:// (development only)
 """
 
@@ -39,13 +39,19 @@ from .ipc_server import IpcServer
 
 
 def _build_ssl_ctx(cfg_tls) -> ssl.SSLContext | None:  # type: ignore[no-untyped-def]
-    """Build a client mTLS SSLContext, or None for dev/plaintext mode."""
+    """Build a client SSLContext, or None for dev/plaintext mode.
+
+    One-way TLS (IDLEGPU_CA_CERT only): verifies the broker certificate but
+    sends no client certificate.
+    mTLS (all three vars set): mutual authentication — both sides present certs.
+    """
     if not cfg_tls.enabled:
         return None
 
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     ctx.load_verify_locations(cfg_tls.ca_cert)
-    ctx.load_cert_chain(cfg_tls.sidecar_cert, cfg_tls.sidecar_key)
+    if cfg_tls.mtls_enabled:
+        ctx.load_cert_chain(cfg_tls.sidecar_cert, cfg_tls.sidecar_key)
     # Require the broker to present a certificate signed by our CA.
     ctx.verify_mode = ssl.CERT_REQUIRED
     ctx.check_hostname = True
@@ -68,9 +74,13 @@ async def _run() -> None:
     ssl_ctx = None if cfg.dev_mode else _build_ssl_ctx(cfg.tls)
     if ssl_ctx is None and not cfg.dev_mode:
         logging.warning(
-            "sidecar: TLS certificates not configured — using plaintext ws://. "
-            "Set IDLEGPU_CA_CERT, IDLEGPU_SIDECAR_CERT, IDLEGPU_SIDECAR_KEY for mTLS."
+            "sidecar: TLS not configured — using plaintext ws://. "
+            "Set IDLEGPU_CA_CERT for one-way TLS, or set all three "
+            "(IDLEGPU_CA_CERT, IDLEGPU_SIDECAR_CERT, IDLEGPU_SIDECAR_KEY) for mTLS."
         )
+    elif ssl_ctx is not None:
+        tls_mode = "mTLS" if cfg.tls.mtls_enabled else "one-way TLS"
+        logging.info("sidecar: %s enabled", tls_mode)
 
     bridge = CudaBridge(
         broker_host=cfg.broker_host,
