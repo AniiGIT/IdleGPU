@@ -7,12 +7,13 @@ broker/app.py - Two FastAPI applications: enrollment server and main broker.
 Two separate ASGI apps run on separate ports:
 
   enroll_app  (plain HTTP, enroll_port):
-    GET  /ca.crt   - Serve CA certificate PEM (unauthenticated; public artifact)
-    POST /enroll   - Accept {token, agent_id, csr_pem}; return signed agent cert
-                     Token is single-use; consumed on first successful call.
+    GET  /ca.crt          - Serve CA certificate PEM (unauthenticated; public artifact)
+    POST /enroll          - Accept {token, agent_id, csr_pem}; return signed agent cert
+    POST /enroll/sidecar  - Accept {token, sidecar_id, csr_pem}; return signed sidecar cert
+                            Both endpoints consume the same single-use token.
 
-    Runs on a dedicated plain HTTP port so agents can bootstrap credentials
-    before they have a client certificate for the mTLS main port.
+    Runs on a dedicated plain HTTP port so agents and sidecars can bootstrap
+    credentials before they have a client certificate for the mTLS main port.
 
   app  (mTLS when [tls] is configured, server.port):
     GET  /status            - Connected agent list and metrics
@@ -113,6 +114,17 @@ class EnrollResponse(BaseModel):
     agent_cert_pem: str
 
 
+class EnrollSidecarRequest(BaseModel):
+    token: str
+    sidecar_id: str
+    csr_pem: str
+
+
+class EnrollSidecarResponse(BaseModel):
+    ca_cert_pem: str
+    sidecar_cert_pem: str
+
+
 @enroll_app.get("/ca.crt")
 async def get_ca_cert(request: Request) -> Response:
     """
@@ -189,6 +201,58 @@ async def enroll(body: EnrollRequest, request: Request) -> EnrollResponse:
     return EnrollResponse(
         ca_cert_pem=ca_cert_pem.decode("ascii"),
         agent_cert_pem=agent_cert_pem.decode("ascii"),
+    )
+
+
+@enroll_app.post("/enroll/sidecar", response_model=EnrollSidecarResponse)
+async def enroll_sidecar(body: EnrollSidecarRequest, request: Request) -> EnrollSidecarResponse:
+    """
+    Enroll a sidecar: validate the one-time token and sign the submitted CSR.
+
+    Identical to POST /enroll except the request body carries a sidecar_id and
+    the response field is sidecar_cert_pem.  Uses the same single-use token
+    mechanism -- run `idlegpu-broker setup` to generate a fresh token for each
+    enrollment (agents and sidecars share the same token pool).
+    """
+    from .pki import consume_enrollment_token, sign_csr  # noqa: PLC0415
+
+    data_dir = _cfg_data_dir(request)
+    ca_path = data_dir / "ca.crt"
+    ca_key_path = data_dir / "ca.key"
+
+    if not ca_path.exists() or not ca_key_path.exists():
+        raise HTTPException(
+            status_code=503,
+            detail="PKI not initialised. Run `idlegpu-broker setup` first.",
+        )
+
+    if not consume_enrollment_token(data_dir, body.token):
+        logger.warning(
+            "enrollment rejected for sidecar %s: invalid or expired token",
+            body.sidecar_id,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid or expired enrollment token.",
+        )
+
+    try:
+        ca_cert_pem = ca_path.read_bytes()
+        ca_key_pem = ca_key_path.read_bytes()
+    except OSError as exc:
+        logger.error("could not read CA credentials: %s", exc)
+        raise HTTPException(status_code=500, detail="Could not read CA credentials.")
+
+    try:
+        sidecar_cert_pem = sign_csr(ca_cert_pem, ca_key_pem, body.csr_pem.encode())
+    except ValueError as exc:
+        logger.warning("CSR signing failed for sidecar %s: %s", body.sidecar_id, exc)
+        raise HTTPException(status_code=400, detail=f"CSR error: {exc}")
+
+    logger.info("enrolled sidecar %s", body.sidecar_id)
+    return EnrollSidecarResponse(
+        ca_cert_pem=ca_cert_pem.decode("ascii"),
+        sidecar_cert_pem=sidecar_cert_pem.decode("ascii"),
     )
 
 
