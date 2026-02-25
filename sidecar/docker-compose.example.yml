@@ -1,0 +1,81 @@
+# Copyright (C) 2026 AniiGIT
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# sidecar/docker-compose.example.yml
+#
+# Example showing how to run the IdleGPU sidecar alongside a CUDA application
+# (Unmanic is used here as a representative example).
+#
+# How it works
+# ─────────────
+# 1. The sidecar container builds libidlegpu-cuda.so and exposes it via a
+#    shared volume (idlegpu_lib).
+# 2. The sidecar runs idlegpu-sidecar, which listens on a Unix socket
+#    (idlegpu_sock) for IPC connections from libidlegpu-cuda.so.
+# 3. The CUDA application container has LD_PRELOAD set to the shim path,
+#    so all cuXxx() calls are intercepted and forwarded to the sidecar.
+# 4. The sidecar sends CUDA call frames over WebSocket to the broker, which
+#    routes them to the idle gaming PC (agent) for execution on the real GPU.
+#
+# TLS certificates
+# ─────────────────
+# Mount your signed certificate bundle into /etc/idlegpu/tls/ and set the
+# IDLEGPU_CA_CERT / _SIDECAR_CERT / _SIDECAR_KEY env vars accordingly.
+# Leave them unset (or set IDLEGPU_DEV=1) for plaintext dev mode.
+#
+# Replace placeholder values (YOUR_*) before use.
+
+version: "3.9"
+
+volumes:
+  idlegpu_lib:    # libidlegpu-cuda.so shared between sidecar and app
+  idlegpu_sock:   # Unix socket directory shared between sidecar and app
+
+services:
+
+  # ── IdleGPU sidecar ────────────────────────────────────────────────────────
+  idlegpu-sidecar:
+    build:
+      context: ..          # repo root (contains shim/ sidecar/ pyproject.toml)
+      dockerfile: sidecar/Dockerfile
+    restart: unless-stopped
+    environment:
+      IDLEGPU_BROKER_HOST: "YOUR_BROKER_HOST"    # e.g. my-server.local
+      IDLEGPU_BROKER_PORT: "8765"
+      IDLEGPU_AGENT_ID:    "YOUR_AGENT_UUID"      # from `idlegpu-agent status`
+      IDLEGPU_SOCKET:      "/var/run/idlegpu/cuda.sock"
+      # TLS (comment out for dev mode):
+      IDLEGPU_CA_CERT:       "/etc/idlegpu/tls/ca.crt"
+      IDLEGPU_SIDECAR_CERT:  "/etc/idlegpu/tls/sidecar.crt"
+      IDLEGPU_SIDECAR_KEY:   "/etc/idlegpu/tls/sidecar.key"
+      # Uncomment for plaintext dev mode (never in production):
+      # IDLEGPU_DEV: "1"
+    volumes:
+      # Expose libidlegpu-cuda.so to the application container.
+      - idlegpu_lib:/opt/idlegpu/lib:ro
+      # Shared Unix socket directory.
+      - idlegpu_sock:/var/run/idlegpu
+      # TLS certificates (bind-mount from host):
+      - /etc/idlegpu/tls:/etc/idlegpu/tls:ro
+
+  # ── CUDA application (Unmanic example) ────────────────────────────────────
+  unmanic:
+    image: josh5/unmanic:latest
+    restart: unless-stopped
+    depends_on:
+      - idlegpu-sidecar
+    environment:
+      # Intercept all CUDA calls and forward them to the sidecar.
+      LD_PRELOAD: "/opt/idlegpu/lib/libidlegpu-cuda.so"
+      # Tell the shim where the sidecar's Unix socket lives.
+      IDLEGPU_SOCKET: "/var/run/idlegpu/cuda.sock"
+    volumes:
+      # Mount the shim library from the sidecar build.
+      - idlegpu_lib:/opt/idlegpu/lib:ro
+      # Mount the Unix socket directory.
+      - idlegpu_sock:/var/run/idlegpu
+      # Application data (adjust paths for your setup):
+      - /your/media:/library
+      - /your/unmanic/config:/config
+    ports:
+      - "8888:8888"

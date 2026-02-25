@@ -212,7 +212,9 @@ class BrokerConnection:
 
             elif not idle and was_idle:
                 self._tlog.write(Event.ACTIVE)
-                await self._cuda.close()
+                # Graceful reclaim: send DISCONNECT so the sidecar can drain
+                # any in-flight CUDA calls before the channel closes.
+                await self._cuda.close(graceful=True)
 
             was_idle = idle
 

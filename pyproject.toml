@@ -26,15 +26,19 @@ dependencies = [
     # TOML serialisation -- used to write [tls] paths back to config files after
     # `broker setup` and `agent enroll` (tomllib in stdlib only reads, not writes)
     "tomli-w>=1.0",
+    # Binary serialisation for the CUDA channel frame payload.
+    # The broker routes msgpack-encoded frames verbatim; agent and sidecar decode.
+    "msgpack>=1.0",
 ]
 
 [project.scripts]
-idlegpu-agent  = "agent.__main__:main"
-idlegpu-broker = "broker.__main__:main"
+idlegpu-agent   = "agent.__main__:main"
+idlegpu-broker  = "broker.__main__:main"
+idlegpu-sidecar = "sidecar.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["agent*", "broker*"]
+include = ["agent*", "broker*", "sidecar*"]
 
 [tool.setuptools.package-data]
 # Bundle default configs so importlib.resources can locate them at runtime.

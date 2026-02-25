@@ -11,16 +11,10 @@ to the agent, and return-value frames back.
 Lifecycle (managed by BrokerConnection._idle_loop):
 
   System goes idle   → CudaChannel.open()  called
-  CUDA calls arrive  → _dispatch_frame() called for each (stub in Phase 2C)
-  System goes active → CudaChannel.close() called; broker closes the pairing
+  CUDA calls arrive  → _dispatch_frame() executes on real GPU via CudaExecutor
+  System goes active → CudaChannel.close(graceful=True) sends DISCONNECT first
 
 Frame format: see agent/frame.py.
-
-Phase 2C status
-───────────────
-This class establishes and maintains the connection. _dispatch_frame() logs
-each incoming call by function name but does not yet execute any CUDA API.
-Phase 2D will route calls to the local CUDA server (libidlegpu-cuda.so shim).
 """
 
 from __future__ import annotations
@@ -33,7 +27,11 @@ import websockets
 import websockets.exceptions
 
 from .config import AgentConfig
-from .frame import CUDA_CALL, DISCONNECT, NVENC_CALL, Frame, type_name, unpack
+from .cuda_executor import CudaExecutor
+from .frame import (
+    CUDA_CALL, CUDA_RETURN, DISCONNECT, NVENC_CALL, NVENC_RETURN,
+    Frame, type_name, pack, unpack,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +68,9 @@ class CudaChannel:
         self._agent_id = agent_id
         self._ssl_ctx = ssl_ctx
         self._task: asyncio.Task | None = None  # type: ignore[type-arg]
+        self._executor = CudaExecutor()
+        # Active WebSocket reference for graceful close; written by _run task.
+        self._active_ws: websockets.WebSocketClientProtocol | None = None  # type: ignore[name-defined]
 
     @property
     def is_open(self) -> bool:
@@ -86,17 +87,34 @@ class CudaChannel:
         self._task = asyncio.create_task(self._run(), name="cuda-channel")
         logger.info("cuda channel opening for agent %s", self._agent_id)
 
-    async def close(self) -> None:
+    async def close(self, graceful: bool = False) -> None:
         """Close the CUDA channel and wait for the background task to finish.
+
+        When graceful=True, sends a DISCONNECT frame to the broker before
+        cancelling the task so the sidecar can drain in-flight calls cleanly.
 
         No-op if already closed.
         """
         if not self.is_open:
             return
         assert self._task is not None
+
+        if graceful and self._active_ws is not None:
+            try:
+                disconnect = pack(Frame(
+                    msg_type=DISCONNECT,
+                    call_id=0,
+                    payload={"reason": "host_active"},
+                ))
+                await asyncio.wait_for(self._active_ws.send(disconnect), timeout=1.0)
+                logger.debug("cuda channel: sent graceful DISCONNECT to broker")
+            except Exception as exc:
+                logger.debug("cuda channel: graceful DISCONNECT failed: %s", exc)
+
         self._task.cancel()
         await asyncio.gather(self._task, return_exceptions=True)
         self._task = None
+        self._active_ws = None
         logger.info("cuda channel closed for agent %s", self._agent_id)
 
     # ------------------------------------------------------------------ #
@@ -125,8 +143,12 @@ class CudaChannel:
                         uri,
                         **connect_kwargs,
                     ) as ws:
+                        self._active_ws = ws
                         logger.info("cuda channel connected to broker (%s)", uri)
-                        await self._recv_loop(ws)
+                        try:
+                            await self._recv_loop(ws)
+                        finally:
+                            self._active_ws = None
                         # Clean close by broker — do not retry.
                         logger.info("cuda channel: broker closed connection cleanly")
                         return
@@ -175,21 +197,36 @@ class CudaChannel:
         frame: Frame,
         ws: websockets.WebSocketClientProtocol,  # type: ignore[name-defined]
     ) -> None:
-        """
-        Dispatch an incoming CUDA/NVENC frame.
-
-        Phase 2C: logs the call and records it as unimplemented.
-        Phase 2D: will route to the local CUDA executor.
-        """
+        """Execute an incoming CUDA or NVENC call and send the return frame."""
         func_name: str = frame.payload.get("func", "<unknown>")
 
-        if frame.msg_type in (CUDA_CALL, NVENC_CALL):
-            logger.info(
-                "cuda channel: received %s call_id=%d func=%s "
-                "(unimplemented in Phase 2C)",
-                type_name(frame.msg_type), frame.call_id, func_name,
+        if frame.msg_type == CUDA_CALL:
+            logger.debug(
+                "cuda channel: CUDA_CALL call_id=%d func=%s",
+                frame.call_id, func_name,
             )
-            # TODO Phase 2D: forward to CUDA executor and send CUDA_RETURN.
+            # Execute on the local GPU (synchronous ctypes call — fast enough
+            # that running in the event loop thread is acceptable for Tier 1).
+            resp = self._executor.dispatch(frame.payload)
+            return_frame = Frame(
+                msg_type=CUDA_RETURN,
+                call_id=frame.call_id,
+                payload=resp,
+            )
+            await ws.send(pack(return_frame))
+
+        elif frame.msg_type == NVENC_CALL:
+            logger.debug(
+                "cuda channel: NVENC_CALL call_id=%d func=%s",
+                frame.call_id, func_name,
+            )
+            resp = self._executor.dispatch_nvenc(frame.payload)
+            return_frame = Frame(
+                msg_type=NVENC_RETURN,
+                call_id=frame.call_id,
+                payload=resp,
+            )
+            await ws.send(pack(return_frame))
 
         elif frame.msg_type == DISCONNECT:
             logger.info(
