@@ -5,8 +5,8 @@
 broker/__main__.py - Entry point for the IdleGPU broker.
 
 Usage:
-  idlegpu-broker setup  [--hostname HOST] [--data-dir DIR] [--start]
-  idlegpu-broker start  [--host ADDR] [--port PORT] [--data-dir DIR] [--dev]
+  idlegpu-broker setup  [--hostname HOST] [--data-dir DIR] [--config FILE] [--start]
+  idlegpu-broker start  [--host ADDR] [--port PORT] [--data-dir DIR] [--config FILE] [--dev]
 
 Commands:
   setup   Generate the local CA, broker certificate, and one-time enrollment
@@ -43,17 +43,18 @@ from .config import load_config, system_config_path
 # ---------------------------------------------------------------------------
 
 
-def _patch_toml_tls(config_path: Path, tls_values: dict) -> None:
+def _patch_toml_tls(tls_values: dict, data_dir: Path) -> Path | None:
     """
-    Write or update the [tls] section in a TOML config file.
+    Write or update the [tls] section in broker.toml.
+
+    Tries the system config path first; falls back to data_dir/broker.toml
+    on permission errors. Returns the path that was successfully written, or
+    None when all candidates fail (prints manual fallback instructions then).
 
     Reads the existing file (if present), merges tls_values into the parsed
     data, and writes back using tomli_w. All other sections are preserved.
     Note: tomli_w does not round-trip comments -- they are not preserved on
     re-write, but all key/value pairs remain intact.
-
-    On write failure (e.g. permission denied), prints a manual fallback
-    to stderr so the operator is never left without instructions.
     """
     try:
         import tomli_w  # noqa: PLC0415
@@ -64,32 +65,39 @@ def _patch_toml_tls(config_path: Path, tls_values: dict) -> None:
         )
         sys.exit(1)
 
-    data: dict = {}
-    if config_path.exists():
+    candidates = [system_config_path(), data_dir / "broker.toml"]
+    for config_path in candidates:
+        data: dict = {}
+        if config_path.exists():
+            try:
+                with open(config_path, "rb") as fh:
+                    data = tomllib.load(fh)
+            except (OSError, tomllib.TOMLDecodeError):
+                pass  # start fresh; existing file could not be parsed
+
+        data["tls"] = tls_values
+
         try:
-            with open(config_path, "rb") as fh:
-                data = tomllib.load(fh)
-        except (OSError, tomllib.TOMLDecodeError):
-            pass  # start fresh; existing file could not be parsed
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(config_path, "wb") as fh:
+                tomli_w.dump(data, fh)
+            return config_path
+        except OSError:
+            continue
 
-    data["tls"] = tls_values
-
-    try:
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(config_path, "wb") as fh:
-            tomli_w.dump(data, fh)
-    except OSError as exc:
-        print(
-            f"Warning: could not write TLS config to {config_path}: {exc}",
-            file=sys.stderr,
-        )
-        print(
-            "Add the following to your broker.toml [tls] section manually:",
-            file=sys.stderr,
-        )
-        print("[tls]", file=sys.stderr)
-        for key, val in tls_values.items():
-            print(f'{key} = "{val}"', file=sys.stderr)
+    # All candidates failed — print manual fallback.
+    print(
+        "Warning: could not write TLS config to any location.",
+        file=sys.stderr,
+    )
+    print(
+        "Add the following to your broker.toml [tls] section manually:",
+        file=sys.stderr,
+    )
+    print("[tls]", file=sys.stderr)
+    for key, val in tls_values.items():
+        print(f'{key} = "{val}"', file=sys.stderr)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +113,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
     """
     from .pki import check_cert_expiry, setup  # noqa: PLC0415
 
-    cfg = load_config()
+    cfg = load_config(path=Path(args.config) if args.config else None)
 
     if args.data_dir is not None:
         cfg.data.data_dir = args.data_dir
@@ -124,12 +132,14 @@ def cmd_setup(args: argparse.Namespace) -> None:
 
     cert_days = check_cert_expiry((data_dir / "broker.crt").read_bytes())
 
-    config_path = system_config_path()
-    _patch_toml_tls(config_path, {
-        "ca_cert":     str(ca_cert_path),
-        "broker_cert": str(broker_cert_path),
-        "broker_key":  str(broker_key_path),
-    })
+    config_path = _patch_toml_tls(
+        {
+            "ca_cert":     str(ca_cert_path),
+            "broker_cert": str(broker_cert_path),
+            "broker_key":  str(broker_key_path),
+        },
+        data_dir,
+    )
 
     print("Certificates generated.")
     print(f"  Broker cert expires in {cert_days} days.")
@@ -138,7 +148,8 @@ def cmd_setup(args: argparse.Namespace) -> None:
     print(f"  {fingerprint}")
     print("  Share this with agents for out-of-band verification.")
     print()
-    print(f"TLS configuration written to {config_path}.")
+    if config_path is not None:
+        print(f"TLS configuration written to {config_path}.")
     print()
     print("One-time enrollment token:")
     print(f"  {token}")
@@ -153,7 +164,7 @@ def cmd_setup(args: argparse.Namespace) -> None:
         print()
         print("Starting broker (Ctrl+C to stop)...")
         print()
-        cmd_start(argparse.Namespace(host=None, port=None, data_dir=args.data_dir, dev=False))
+        cmd_start(argparse.Namespace(host=None, port=None, data_dir=args.data_dir, config=args.config, dev=False))
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +176,7 @@ def cmd_start(args: argparse.Namespace) -> None:
     """Load config and run the broker until interrupted."""
     import asyncio  # noqa: PLC0415
 
-    cfg = load_config()
+    cfg = load_config(path=Path(args.config) if args.config else None)
 
     if args.host is not None:
         cfg.server.host = args.host
@@ -311,6 +322,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Data directory for generated files (overrides broker.toml).",
     )
     p_setup.add_argument(
+        "--config",
+        default=None,
+        metavar="FILE",
+        help="Explicit path to broker.toml (bypasses auto-discovery).",
+    )
+    p_setup.add_argument(
         "--start",
         action="store_true",
         help="Start the broker immediately after setup completes.",
@@ -340,6 +357,12 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         dest="data_dir",
         help="Data directory (overrides broker.toml data.data_dir).",
+    )
+    p_start.add_argument(
+        "--config",
+        default=None,
+        metavar="FILE",
+        help="Explicit path to broker.toml (bypasses auto-discovery).",
     )
     p_start.add_argument(
         "--dev",

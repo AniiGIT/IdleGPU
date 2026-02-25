@@ -83,17 +83,18 @@ def _remove_pid(pid_file: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _patch_toml_sections(config_path: Path, sections: dict[str, dict]) -> None:
+def _patch_toml_sections(sections: dict[str, dict], data_dir: Path) -> Path | None:
     """
-    Write or update one or more sections in a TOML config file.
+    Write or update one or more sections in agent.toml.
+
+    Tries the system config path first; falls back to data_dir/agent.toml
+    on permission errors. Returns the path that was successfully written, or
+    None when all candidates fail (prints manual fallback instructions then).
 
     Reads the existing file (if present), merges each section dict into the
     parsed data, and writes back using tomli_w. All other sections are
     preserved. Note: tomli_w does not round-trip comments -- they are not
     preserved on re-write, but all key/value pairs remain intact.
-
-    On write failure (e.g. permission denied), prints a manual fallback
-    to stderr so the operator is never left without instructions.
     """
     try:
         import tomli_w  # noqa: PLC0415
@@ -104,34 +105,41 @@ def _patch_toml_sections(config_path: Path, sections: dict[str, dict]) -> None:
         )
         sys.exit(1)
 
-    data: dict = {}
-    if config_path.exists():
+    candidates = [system_config_path(), data_dir / "agent.toml"]
+    for config_path in candidates:
+        data: dict = {}
+        if config_path.exists():
+            try:
+                with open(config_path, "rb") as fh:
+                    data = tomllib.load(fh)
+            except (OSError, tomllib.TOMLDecodeError):
+                pass  # start fresh; existing file could not be parsed
+
+        data.update(sections)
+
         try:
-            with open(config_path, "rb") as fh:
-                data = tomllib.load(fh)
-        except (OSError, tomllib.TOMLDecodeError):
-            pass  # start fresh; existing file could not be parsed
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(config_path, "wb") as fh:
+                tomli_w.dump(data, fh)
+            return config_path
+        except OSError:
+            continue
 
-    data.update(sections)
-
-    try:
-        config_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(config_path, "wb") as fh:
-            tomli_w.dump(data, fh)
-    except OSError as exc:
-        print(
-            f"Warning: could not write config to {config_path}: {exc}",
-            file=sys.stderr,
-        )
-        print(
-            "Add the following to your agent.toml manually:",
-            file=sys.stderr,
-        )
-        for section_name, section_values in sections.items():
-            print(f"[{section_name}]", file=sys.stderr)
-            for key, val in section_values.items():
-                val_repr = f'"{val}"' if isinstance(val, str) else str(val)
-                print(f"{key} = {val_repr}", file=sys.stderr)
+    # All candidates failed — print manual fallback.
+    print(
+        "Warning: could not write config to any location.",
+        file=sys.stderr,
+    )
+    print(
+        "Add the following to your agent.toml manually:",
+        file=sys.stderr,
+    )
+    for section_name, section_values in sections.items():
+        print(f"[{section_name}]", file=sys.stderr)
+        for key, val in section_values.items():
+            val_repr = f'"{val}"' if isinstance(val, str) else str(val)
+            print(f"{key} = {val_repr}", file=sys.stderr)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -362,21 +370,24 @@ def cmd_enroll(args: argparse.Namespace) -> None:
     cert_path = data_dir / "agent.crt"
     key_path = data_dir / "agent.key"
 
-    config_path = system_config_path()
-    _patch_toml_sections(config_path, {
-        "broker": {
-            "host": args.broker,
-            "port": args.port,
+    config_path = _patch_toml_sections(
+        {
+            "broker": {
+                "host": args.broker,
+                "port": args.port,
+            },
+            "tls": {
+                "ca_cert":    str(ca_path),
+                "agent_cert": str(cert_path),
+                "agent_key":  str(key_path),
+            },
         },
-        "tls": {
-            "ca_cert":    str(ca_path),
-            "agent_cert": str(cert_path),
-            "agent_key":  str(key_path),
-        },
-    })
+        data_dir,
+    )
 
     print("Enrollment successful.")
-    print(f"[broker] and [tls] written to {config_path}.")
+    if config_path is not None:
+        print(f"[broker] and [tls] written to {config_path}.")
     print()
 
     if args.start:

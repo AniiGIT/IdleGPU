@@ -4,12 +4,15 @@
 """
 agent/config.py - Configuration loading for the IdleGPU agent.
 
-Reads agent.toml from the system-wide config location:
-  Linux:   /etc/idlegpu/agent.toml
-  Windows: %PROGRAMDATA%\\idlegpu\\agent.toml
+Probes agent.toml from these locations in order (first match wins):
+  1. /etc/idlegpu/agent.toml           (Linux, system install — root managed)
+     %PROGRAMDATA%\\idlegpu\\agent.toml  (Windows)
+  2. $XDG_CONFIG_HOME/idlegpu/agent.toml  (~/.config/idlegpu/agent.toml)
+     %APPDATA%\\idlegpu\\agent.toml       (Windows)
+  3. <data_dir>/agent.toml             (last-resort; same dir as certs)
 
-On first run (file absent), the bundled default is copied to the system
-location using importlib.resources and the user is told where it landed.
+On first run (none of the above found), the bundled default is seeded to
+the first writable location and the user is told where it landed.
 
 Config is read once at startup; changes require an agent restart.
 Secrets (TLS certificates, HMAC keys) are NEVER stored in this file.
@@ -265,30 +268,56 @@ def system_config_path() -> Path:
         return Path("/etc/idlegpu/agent.toml")
 
 
+def _xdg_config_path() -> Path:
+    """Return the XDG / AppData user config path for agent.toml."""
+    if _OS_NAME == "nt":
+        appdata = os.environ.get("APPDATA", "")
+        base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+        return base / "idlegpu" / "agent.toml"
+    xdg = os.environ.get("XDG_CONFIG_HOME", "")
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / "idlegpu" / "agent.toml"
+
+
+def config_search_paths(data_dir: str | None = None) -> list[Path]:
+    """Return agent.toml search paths in priority order (first match wins).
+
+    Paths:
+      1. System config path (/etc/idlegpu/agent.toml or %PROGRAMDATA%)
+      2. XDG / AppData user config path (~/.config/idlegpu/agent.toml)
+      3. <data_dir>/agent.toml  (last resort; same directory as certs)
+    """
+    if data_dir is not None:
+        d = Path(data_dir)
+    else:
+        d = Path(_default_transparency_log()).parent
+    return [system_config_path(), _xdg_config_path(), d / "agent.toml"]
+
+
 # ---------------------------------------------------------------------------
 # First-run seeding
 # ---------------------------------------------------------------------------
 
 
-def _seed_default_config(dest: Path) -> None:
-    """
-    Copy the bundled default config to *dest* using importlib.resources.
+def _seed_default_config_any(paths: list[Path]) -> None:
+    """Copy the bundled default agent.toml to the first writable path.
 
-    Prints a user-facing message so the operator knows where the file landed.
-    Silently logs and continues if the write fails (e.g. insufficient permissions).
+    Tries each candidate in order; uses the first one that succeeds.
+    Logs a warning if no path is writable (built-in defaults are used instead).
     """
-    try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        content = files("agent.defaults").joinpath("agent.toml").read_bytes()
-        dest.write_bytes(content)
-        print(f"IdleGPU: no config found. Created default config at:\n  {dest}")
-        print("Edit it to customise thresholds and broker settings, then restart.")
-    except OSError as exc:
-        logger.warning(
-            "could not write default config to %s: %s; using built-in defaults",
-            dest,
-            exc,
-        )
+    content = files("agent.defaults").joinpath("agent.toml").read_bytes()
+    for dest in paths:
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(content)
+            print(f"IdleGPU: no config found. Created default config at:\n  {dest}")
+            print("Edit it to customise thresholds and broker settings, then restart.")
+            return
+        except OSError:
+            continue
+    logger.warning(
+        "could not write default config to any location; using built-in defaults"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -301,18 +330,24 @@ def load_config(path: Path | None = None) -> AgentConfig:
     Load AgentConfig from agent.toml.
 
     Behaviour:
-    - If *path* is None, the system-wide location is used.
-    - If the file does not exist, the bundled default is seeded there and
-      built-in defaults are returned (no parse needed; bundled == defaults).
+    - If *path* is explicitly given, only that path is used.
+    - If *path* is None, config_search_paths() is probed in order; the first
+      existing file is used.
+    - If no file exists in any search location, the bundled default is seeded
+      to the first writable path and built-in defaults are returned.
     - Missing TOML keys use their dataclass defaults.
     - Out-of-range values log a warning and fall back to the default.
     - Config is read once; changes require an agent restart.
     """
     if path is None:
-        path = system_config_path()
+        candidates = config_search_paths()
+        for candidate in candidates:
+            if candidate.exists():
+                path = candidate
+                break
 
-    if not path.exists():
-        _seed_default_config(path)
+    if path is None:
+        _seed_default_config_any(config_search_paths())
         return AgentConfig()  # bundled default == dataclass defaults; no parse needed
 
     with open(path, "rb") as fh:
