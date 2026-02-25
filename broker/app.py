@@ -18,8 +18,9 @@ Two separate ASGI apps run on separate ports:
   app  (mTLS when [tls] is configured, server.port):
     GET  /status            - Connected agent list and metrics
     WS   /ws/agent          - Agent control channel (JSON, idle status)
-    WS   /ws/cuda/{id}      - Agent CUDA channel (binary frames, msgpack)
-    WS   /ws/sidecar/{id}   - Sidecar CUDA channel (binary frames, msgpack)
+    WS   /ws/cuda/{id}           - Agent CUDA channel (binary frames, msgpack)
+    WS   /ws/sidecar/{id}        - Sidecar CUDA channel; pairs immediately or queues
+    WS   /ws/sidecar/wait/{id}   - Sidecar CUDA channel; waits for named agent (preferred)
 
 CUDA channel binary frame format (see broker/frame.py):
 
@@ -415,11 +416,26 @@ async def sidecar_cuda_websocket(websocket: WebSocket, agent_id: str) -> None:
     """
     Accept a sidecar connection targeting a specific agent.
 
-    The sidecar connects here when it has CUDA work to forward to a specific
-    idle agent. The broker pairs the sidecar with the named agent's CUDA
-    channel and relays binary frames bidirectionally until either side closes.
+    If the named agent has an idle CUDA channel, pairs and relays immediately.
+    If not, queues the sidecar and pairs the moment the agent becomes idle.
+    The connection stays open until paired and the relay completes.
 
-    Closes with code 4001 if the named agent has no idle CUDA channel.
+    Prefer /ws/sidecar/wait/{agent_id} for new sidecar implementations —
+    it is semantically identical but makes the waiting intent explicit.
+    """
+    await websocket.accept()
+    await cuda_router.handle_sidecar(agent_id, websocket)
+
+
+@app.websocket("/ws/sidecar/wait/{agent_id}")
+async def sidecar_wait_websocket(websocket: WebSocket, agent_id: str) -> None:
+    """
+    Accept a sidecar connection that waits for the named agent to become idle.
+
+    Identical to /ws/sidecar/{agent_id} — both endpoints use the same push
+    pairing model. This path exists as the canonical endpoint for sidecar
+    implementations; the plain /ws/sidecar/{agent_id} path is retained for
+    backwards compatibility.
     """
     await websocket.accept()
     await cuda_router.handle_sidecar(agent_id, websocket)

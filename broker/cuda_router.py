@@ -8,20 +8,26 @@ Lifecycle
 ─────────
   1. Agent connects to /ws/cuda/{agent_id}
        → router.handle_agent(agent_id, ws) is called
-       → agent is stored in _idle[agent_id] and waits
+       → if a sidecar is already queued for this agent, pair immediately
+       → otherwise store in _idle and wait
 
-  2. Sidecar connects to /ws/sidecar/{agent_id}
+  2. Sidecar connects to /ws/sidecar/{agent_id} or /ws/sidecar/wait/{agent_id}
        → router.handle_sidecar(agent_id, ws) is called
-       → broker pops the idle agent, assigns a job_id
-       → bidirectional relay starts: frames flow broker-transparently
-       → relay ends when either side disconnects
-       → agent's waiting coroutine is unblocked and cleans up
+       → if agent is idle: pop from _idle, relay immediately
+       → if agent is not idle: add to _waiting[agent_id] queue and block
 
-  3. At any point before pairing, agent can disconnect
-       → relay_done event is set, agent handler cleans up normally
+  3. Pairing occurs — relay runs bidirectionally until either side disconnects.
 
-The broker never inspects frame payload — it reads only the 12-byte header
-to know how many bytes to forward (see frame.py).
+  4. At any point before pairing, either side may disconnect cleanly:
+       → agent disconnect: relay_done event is set; handle_agent cleans up.
+       → sidecar disconnect: sidecar monitor wakes handle_sidecar; exits
+         without starting a relay.
+
+Push model
+──────────
+handle_agent checks _waiting before registering in _idle.  The moment an
+agent connects, any queued sidecar is paired with zero delay — no polling,
+no reconnect backoff on the sidecar side.
 
 Thread safety
 ─────────────
@@ -44,24 +50,38 @@ logger = logging.getLogger(__name__)
 class _AgentEntry:
     """State for one idle agent CUDA channel waiting to be paired."""
     ws: WebSocket
-    # Set by handle_sidecar when a relay is assigned, or by _monitor_task
-    # when the agent disconnects before pairing.
+    # Set by _do_relay when the relay completes, or by _monitor when the agent
+    # disconnects before pairing.
     relay_done: asyncio.Event = field(default_factory=asyncio.Event)
     # Background task that drains the agent WebSocket while idle.
-    # Cancelled by handle_sidecar when relay takes over.
+    # Cancelled by _do_relay when relay takes exclusive ownership.
     monitor_task: asyncio.Task | None = field(default=None)  # type: ignore[type-arg]
+
+
+@dataclass
+class _WaitingEntry:
+    """State for one sidecar queued while waiting for an agent to become idle."""
+    sidecar_ws: WebSocket
+    # Set by handle_agent when it claims this sidecar, or by the sidecar
+    # monitor task when the sidecar disconnects before pairing.
+    ready: asyncio.Event = field(default_factory=asyncio.Event)
+    # Filled in by handle_agent before setting ready.
+    # None if the sidecar disconnected before an agent became available.
+    agent_entry: _AgentEntry | None = field(default=None)
 
 
 class CudaRouter:
     """Maintains idle CUDA channels and relays frames for active jobs.
 
     Instantiated once at module level in broker/app.py and shared between
-    the two WebSocket route handlers.
+    the WebSocket route handlers.
     """
 
     def __init__(self) -> None:
         # Idle agent CUDA channels awaiting a sidecar connection.
         self._idle: dict[str, _AgentEntry] = {}
+        # Sidecars queued per agent_id waiting for that agent to become idle.
+        self._waiting: dict[str, list[_WaitingEntry]] = {}
 
     # ------------------------------------------------------------------ #
     # Public helpers (read-only queries)                                   #
@@ -71,6 +91,10 @@ class CudaRouter:
         """Return agent_ids of agents currently waiting for a CUDA job."""
         return list(self._idle)
 
+    def waiting_count(self, agent_id: str) -> int:
+        """Return the number of sidecars currently queued for agent_id."""
+        return len(self._waiting.get(agent_id, []))
+
     # ------------------------------------------------------------------ #
     # Agent handler                                                        #
     # ------------------------------------------------------------------ #
@@ -79,7 +103,8 @@ class CudaRouter:
         """
         Called by the /ws/cuda/{agent_id} WebSocket handler.
 
-        Registers the agent's CUDA channel as idle and blocks until:
+        If a sidecar is already queued for this agent, pairs immediately.
+        Otherwise registers the agent's CUDA channel as idle and blocks until:
           - a sidecar connects and the relay completes, OR
           - the agent disconnects.
         """
@@ -90,15 +115,29 @@ class CudaRouter:
             try:
                 while True:
                     await ws.receive_bytes()
-                    # Receiving pre-relay data is unexpected; discard silently.
+                    # Pre-relay data is unexpected; discard silently.
             except WebSocketDisconnect:
                 entry.relay_done.set()
             except asyncio.CancelledError:
-                pass  # relay task is taking over
+                pass  # relay is taking over
 
         entry.monitor_task = asyncio.create_task(_monitor())
-        self._idle[agent_id] = entry
-        logger.info("cuda channel: agent %s registered (idle)", agent_id)
+
+        # Pair immediately with a waiting sidecar if one is already queued.
+        waiting_list = self._waiting.get(agent_id)
+        if waiting_list:
+            waiting = waiting_list.pop(0)
+            if not waiting_list:
+                del self._waiting[agent_id]
+            waiting.agent_entry = entry
+            waiting.ready.set()
+            logger.info(
+                "cuda channel: agent %s paired immediately with waiting sidecar",
+                agent_id,
+            )
+        else:
+            self._idle[agent_id] = entry
+            logger.info("cuda channel: agent %s registered (idle)", agent_id)
 
         try:
             await entry.relay_done.wait()
@@ -115,21 +154,72 @@ class CudaRouter:
 
     async def handle_sidecar(self, agent_id: str, sidecar_ws: WebSocket) -> None:
         """
-        Called by the /ws/sidecar/{agent_id} WebSocket handler.
+        Called by /ws/sidecar/{agent_id} and /ws/sidecar/wait/{agent_id}.
 
-        Pops an idle agent, assigns a job_id, and relays binary frames
-        bidirectionally until either side disconnects.
+        If the named agent is idle, pairs and relays immediately.
+        Otherwise adds the sidecar to the waiting queue for agent_id and
+        blocks until the agent becomes idle or the sidecar disconnects.
         """
         entry = self._idle.pop(agent_id, None)
-        if entry is None:
-            logger.warning(
-                "sidecar requested agent %s but no idle CUDA channel found",
-                agent_id,
-            )
-            await sidecar_ws.close(code=4001, reason=f"agent {agent_id} not available")
+        if entry is not None:
+            # Agent already idle — pair and relay immediately.
+            await self._do_relay(entry, agent_id, sidecar_ws)
             return
 
-        # Cancel the idle monitor — relay takes exclusive ownership of agent_ws.
+        # Agent not yet available — queue and wait.
+        waiting = _WaitingEntry(sidecar_ws=sidecar_ws)
+        self._waiting.setdefault(agent_id, []).append(waiting)
+        logger.info(
+            "sidecar queued: waiting for agent %s to become idle", agent_id
+        )
+
+        # Monitor the sidecar socket while waiting so disconnects are detected.
+        async def _sidecar_monitor() -> None:
+            try:
+                while True:
+                    await sidecar_ws.receive_bytes()
+                    # Unexpected data while waiting; discard.
+            except (WebSocketDisconnect, RuntimeError):
+                # Sidecar disconnected — wake the waiter.
+                waiting.ready.set()
+            except asyncio.CancelledError:
+                pass
+
+        monitor = asyncio.create_task(_sidecar_monitor())
+        try:
+            await waiting.ready.wait()
+        finally:
+            monitor.cancel()
+            await asyncio.gather(monitor, return_exceptions=True)
+            # Remove from waiting list if not already popped by handle_agent.
+            waiting_list = self._waiting.get(agent_id, [])
+            try:
+                waiting_list.remove(waiting)
+            except ValueError:
+                pass
+            if not waiting_list:
+                self._waiting.pop(agent_id, None)
+
+        if waiting.agent_entry is None:
+            # Sidecar disconnected before an agent became available.
+            logger.info(
+                "sidecar disconnected while waiting for agent %s", agent_id
+            )
+            return
+
+        await self._do_relay(waiting.agent_entry, agent_id, sidecar_ws)
+
+    # ------------------------------------------------------------------ #
+    # Relay helpers                                                        #
+    # ------------------------------------------------------------------ #
+
+    async def _do_relay(
+        self,
+        entry: _AgentEntry,
+        agent_id: str,
+        sidecar_ws: WebSocket,
+    ) -> None:
+        """Cancel the idle monitor and run the bidirectional relay."""
         if entry.monitor_task and not entry.monitor_task.done():
             entry.monitor_task.cancel()
             await asyncio.gather(entry.monitor_task, return_exceptions=True)
@@ -139,17 +229,11 @@ class CudaRouter:
             "job %s: paired sidecar with agent %s — relay starting",
             job_id, agent_id,
         )
-
         try:
             await self._relay(job_id, entry.ws, sidecar_ws)
         finally:
-            # Unblock the agent handler (in handle_agent).
             entry.relay_done.set()
             logger.info("job %s: relay ended", job_id)
-
-    # ------------------------------------------------------------------ #
-    # Bidirectional frame relay                                            #
-    # ------------------------------------------------------------------ #
 
     @staticmethod
     async def _relay(
@@ -175,9 +259,7 @@ class CudaRouter:
                     data = await src.receive_bytes()
                     await dst.send_bytes(data)
             except WebSocketDisconnect:
-                logger.info(
-                    "job %s: %s disconnected", job_id, direction
-                )
+                logger.info("job %s: %s disconnected", job_id, direction)
             except RuntimeError as exc:
                 # Starlette raises RuntimeError when sending to a closed WS.
                 logger.info(

@@ -5,10 +5,12 @@
 sidecar/cuda_bridge.py - WebSocket connection from the sidecar to the broker.
 
 The sidecar connects to:
-    wss://broker/ws/sidecar/{agent_id}
+    wss://broker/ws/sidecar/wait/{agent_id}
 
-The broker pairs this WebSocket with the idle agent identified by agent_id
-and forwards CUDA channel frames bidirectionally.
+The broker holds this connection open until the named agent registers an
+idle CUDA channel, then pairs them and forwards CUDA frames bidirectionally.
+No polling or reconnect backoff is needed while waiting for the agent —
+the connection simply stays open.
 
 Call flow for a single CUDA API call:
   1. IpcServer receives an IPC call from the shim and decodes it to a dict.
@@ -82,7 +84,7 @@ class CudaBridge:
         scheme = "wss" if self._ssl_ctx is not None else "ws"
         uri = (
             f"{scheme}://{self._broker_host}:{self._broker_port}"
-            f"/ws/sidecar/{self._agent_id}"
+            f"/ws/sidecar/wait/{self._agent_id}"
         )
 
         connect_kwargs: dict = {

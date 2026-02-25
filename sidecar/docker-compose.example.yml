@@ -19,9 +19,16 @@
 #
 # TLS certificates
 # ─────────────────
-# Mount your signed certificate bundle into /etc/idlegpu/tls/ and set the
-# IDLEGPU_CA_CERT / _SIDECAR_CERT / _SIDECAR_KEY env vars accordingly.
-# Leave them unset (or set IDLEGPU_DEV=1) for plaintext dev mode.
+# 1. Run `idlegpu-sidecar enroll --broker HOST --token TOKEN` as the host user
+#    that will own /etc/idlegpu/tls/ (default UID 1000, or whatever you pass as
+#    the UID build arg). This writes ca.crt, sidecar.crt, sidecar.key (mode 600)
+#    and sidecar.env into that directory.
+# 2. Set UID/GID build args to match that host user (export UID=$(id -u) GID=$(id -g))
+#    before running `docker compose build`. The container runs as that UID, so it
+#    can read the mode-600 cert files without needing chmod or root.
+# 3. Load sidecar.env via env_file: (it sets IDLEGPU_CA_CERT, _SIDECAR_CERT, _SIDECAR_KEY).
+#
+# Leave TLS env vars unset (or set IDLEGPU_DEV=1) for plaintext dev mode.
 #
 # Replace placeholder values (YOUR_*) before use.
 
@@ -61,7 +68,12 @@ services:
       - idlegpu_lib:/opt/idlegpu/lib:ro
       # Shared Unix socket directory.
       - idlegpu_sock:/var/run/idlegpu
-      # TLS certificates (bind-mount from host):
+      # TLS certificates (bind-mount from host).
+      # IMPORTANT: the host directory must be owned by the same UID used at
+      # build time (UID arg above). The sidecar process runs as that UID and
+      # cert files are mode 600 — a UID mismatch means unreadable certs without
+      # running chmod. Run `idlegpu-sidecar enroll` as the same user that owns
+      # this directory, or chown the directory to match before building.
       - /etc/idlegpu/tls:/etc/idlegpu/tls:ro
 
   # ── CUDA application (Unmanic example) ────────────────────────────────────
