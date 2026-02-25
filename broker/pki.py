@@ -20,9 +20,11 @@ None of these files are stored in broker.toml. The config file only holds paths.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import secrets
+import socket
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -127,6 +129,73 @@ def generate_ca() -> tuple[bytes, bytes]:
 
 
 # ---------------------------------------------------------------------------
+# Local IP enumeration
+# ---------------------------------------------------------------------------
+
+
+def _enumerate_local_ips(
+    hostname: str,
+) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """Return all local IP addresses to embed in the broker certificate SAN.
+
+    Always includes 127.0.0.1 and ::1.
+
+    Primary method: psutil.net_if_addrs() walks every network interface and
+    collects all assigned IPv4 and IPv6 addresses directly from the kernel.
+    This works even when the machine hostname resolves to 127.0.1.1 in
+    /etc/hosts (a common Debian/Ubuntu setup that fools socket.getaddrinfo).
+
+    Fallback (if psutil is unavailable): socket.getaddrinfo() for *hostname*
+    and the machine's own hostname, plus the UDP-connect trick to discover
+    the primary outbound interface IP.
+    """
+    seen: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
+    seen.add(ipaddress.ip_address("127.0.0.1"))  # type: ignore[arg-type]
+    seen.add(ipaddress.ip_address("::1"))         # type: ignore[arg-type]
+
+    def _add_raw(raw: str) -> None:
+        """Parse raw and add to seen; silently ignore un-parseable strings."""
+        try:
+            seen.add(ipaddress.ip_address(raw.split("%")[0]))  # strip IPv6 zone ID
+        except ValueError:
+            pass
+
+    # --- Primary: psutil enumerates all interface addresses without DNS ---
+    try:
+        import psutil  # noqa: PLC0415
+        for addrs in psutil.net_if_addrs().values():
+            for addr in addrs:
+                if addr.family in (socket.AF_INET, socket.AF_INET6):
+                    _add_raw(addr.address)
+    except ImportError:
+        # --- Fallback 1: DNS resolution of hostname and machine hostname ---
+        def _resolve(name: str) -> None:
+            try:
+                for info in socket.getaddrinfo(name, None):
+                    _add_raw(info[4][0])
+            except OSError:
+                pass
+
+        _resolve(hostname)
+        local_hostname = socket.gethostname()
+        if local_hostname != hostname:
+            _resolve(local_hostname)
+
+        # --- Fallback 2: UDP connect reveals primary outbound interface IP ---
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))   # no data sent; reveals route
+                _add_raw(s.getsockname()[0])
+        except OSError:
+            pass
+
+    # Sort: IPv4 first (more common in LAN configs), then IPv6.
+    ipv4 = sorted(a for a in seen if a.version == 4)
+    ipv6 = sorted(a for a in seen if a.version == 6)
+    return ipv4 + ipv6  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
 # Broker certificate
 # ---------------------------------------------------------------------------
 
@@ -139,8 +208,14 @@ def generate_broker_cert(
     """
     Generate an ECDSA P-256 broker certificate signed by the local CA.
 
-    The certificate includes the hostname as a Subject Alternative Name so
-    that agents can verify the broker's identity when connecting via mTLS.
+    The SAN extension includes:
+    - The provided *hostname* as a DNSName entry.
+    - All local IP addresses enumerated by _enumerate_local_ips() —
+      127.0.0.1, ::1, and every address resolved from the hostname and
+      the machine's own hostname via socket.getaddrinfo().
+
+    This ensures the cert is valid whether agents connect by hostname or
+    by any local IP address (e.g. 192.168.x.x on a LAN).
 
     Returns (cert_pem, key_pem) as bytes.
     """
@@ -149,6 +224,13 @@ def generate_broker_cert(
 
     key = _generate_ec_key()
     now = _now()
+
+    san: list[x509.GeneralName] = [x509.DNSName(hostname)]
+    san.extend(x509.IPAddress(addr) for addr in _enumerate_local_ips(hostname))
+    logger.debug(
+        "broker cert SAN: %s",
+        ", ".join(str(e.value) for e in san),
+    )
 
     cert = (
         x509.CertificateBuilder()
@@ -162,10 +244,7 @@ def generate_broker_cert(
             x509.BasicConstraints(ca=False, path_length=None), critical=True
         )
         .add_extension(
-            x509.SubjectAlternativeName([
-                x509.DNSName(hostname),
-                x509.IPAddress(__import__("ipaddress").ip_address("127.0.0.1")),
-            ]),
+            x509.SubjectAlternativeName(san),
             critical=False,
         )
         .sign(ca_key, hashes.SHA256())
