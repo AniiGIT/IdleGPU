@@ -90,3 +90,31 @@ port = 443
 #
 # Uncomment and set to override:
 # transparency_log = "/var/lib/idlegpu/transparency.log"
+
+
+# ---------------------------------------------------------------------------
+# [tls] -- Mutual TLS certificate paths (Phase 2)
+#
+# When all three paths are set and the files exist, the agent connects using
+# mutual TLS (wss://). When any path is absent or commented out, the agent
+# uses plaintext ws:// -- acceptable only on a trusted local network or with
+# the --dev flag during development.
+#
+# Run `idlegpu-broker setup` on the broker to generate a CA and enrollment
+# token, then run `idlegpu-agent enroll` on this machine to obtain and
+# install the certificate files automatically. The paths below will be
+# printed at the end of enrollment for easy copy-paste into this file.
+# ---------------------------------------------------------------------------
+[tls]
+
+# Path to the CA certificate PEM issued by the broker.
+# Used to verify the broker's identity on every connection.
+# ca_cert = "/var/lib/idlegpu/ca.crt"
+
+# Path to this agent's TLS certificate PEM file.
+# Presented to the broker to prove this agent's identity.
+# agent_cert = "/var/lib/idlegpu/agent.crt"
+
+# Path to this agent's TLS private key PEM file.
+# Must be readable only by the agent process (mode 600 on Linux).
+# agent_key = "/var/lib/idlegpu/agent.key"

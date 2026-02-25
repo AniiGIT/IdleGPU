@@ -2,11 +2,21 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 """
-broker/app.py - FastAPI application: agent WebSocket endpoint and /status API.
+broker/app.py - Two FastAPI applications: enrollment server and main broker.
 
-Phase 1 note: connections are plaintext WebSocket with no authentication.
-mTLS and signed job payloads are added in Phase 2. Do not deploy Phase 1
-on an untrusted network.
+Two separate ASGI apps run on separate ports:
+
+  enroll_app  (plain HTTP, enroll_port):
+    GET  /ca.crt   - Serve CA certificate PEM (unauthenticated; public artifact)
+    POST /enroll   - Accept {token, agent_id, csr_pem}; return signed agent cert
+                     Token is single-use; consumed on first successful call.
+
+    Runs on a dedicated plain HTTP port so agents can bootstrap credentials
+    before they have a client certificate for the mTLS main port.
+
+  app  (mTLS when [tls] is configured, server.port):
+    GET  /status   - Connected agent list and metrics
+    WS   /ws/agent - Agent WebSocket session
 
 Agent WebSocket protocol (JSON messages):
 
@@ -30,8 +40,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
+from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
 
 from .registry import AgentRecord, AgentRegistry
 
@@ -46,8 +59,125 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# Enrollment server -- plain HTTP on enroll_port (see broker/__main__.py).
+# Only serves /ca.crt and /enroll so agents can bootstrap before they hold a
+# client certificate for the mTLS main port.
+enroll_app = FastAPI(
+    title="IdleGPU Enrollment",
+    description="Agent enrollment bootstrap (plain HTTP, separate port).",
+    version="0.1.0",
+)
+
 # Seconds to wait for the hello message after a WebSocket connection opens.
 _HELLO_TIMEOUT = 10.0
+
+
+# ---------------------------------------------------------------------------
+# Enrollment helpers
+# ---------------------------------------------------------------------------
+
+
+def _cfg_data_dir(request: Request) -> Path:
+    """Return the data directory from the app-state config set by cmd_start."""
+    cfg = getattr(request.app.state, "cfg", None)
+    if cfg is None:
+        raise HTTPException(status_code=503, detail="Broker not fully initialised.")
+    return Path(cfg.data.data_dir)
+
+
+# ---------------------------------------------------------------------------
+# Enrollment REST endpoints (HTTP plaintext -- bootstrap only)
+# ---------------------------------------------------------------------------
+
+
+class EnrollRequest(BaseModel):
+    token: str
+    agent_id: str
+    csr_pem: str
+
+
+class EnrollResponse(BaseModel):
+    ca_cert_pem: str
+    agent_cert_pem: str
+
+
+@enroll_app.get("/ca.crt")
+async def get_ca_cert(request: Request) -> Response:
+    """
+    Serve the broker CA certificate PEM.
+
+    Unauthenticated -- agents fetch this before they have any credentials.
+    Operators should verify the CA fingerprint printed by `idlegpu-broker setup`
+    out of band before trusting a new broker.
+    """
+    data_dir = _cfg_data_dir(request)
+    ca_path = data_dir / "ca.crt"
+
+    if not ca_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="CA certificate not found. Run `idlegpu-broker setup` first.",
+        )
+
+    try:
+        pem = ca_path.read_text(encoding="ascii")
+    except OSError as exc:
+        logger.error("could not read CA cert %s: %s", ca_path, exc)
+        raise HTTPException(status_code=500, detail="Could not read CA certificate.")
+
+    return PlainTextResponse(content=pem, media_type="application/x-pem-file")
+
+
+@enroll_app.post("/enroll", response_model=EnrollResponse)
+async def enroll(body: EnrollRequest, request: Request) -> EnrollResponse:
+    """
+    Enroll an agent: validate the one-time token and sign the submitted CSR.
+
+    The token is consumed on first successful use. Any subsequent call with
+    the same token is rejected with 403. Run `idlegpu-broker setup` to
+    generate a fresh token for additional agents.
+    """
+    from .pki import consume_enrollment_token, sign_csr  # noqa: PLC0415
+
+    data_dir = _cfg_data_dir(request)
+    ca_path = data_dir / "ca.crt"
+    ca_key_path = data_dir / "ca.key"
+
+    if not ca_path.exists() or not ca_key_path.exists():
+        raise HTTPException(
+            status_code=503,
+            detail="PKI not initialised. Run `idlegpu-broker setup` first.",
+        )
+
+    # Validate and consume the token atomically -- returns False on mismatch.
+    if not consume_enrollment_token(data_dir, body.token):
+        logger.warning(
+            "enrollment rejected for agent %s: invalid or expired token",
+            body.agent_id,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid or expired enrollment token.",
+        )
+
+    try:
+        ca_cert_pem = ca_path.read_bytes()
+        ca_key_pem = ca_key_path.read_bytes()
+    except OSError as exc:
+        logger.error("could not read CA credentials: %s", exc)
+        raise HTTPException(status_code=500, detail="Could not read CA credentials.")
+
+    try:
+        agent_cert_pem = sign_csr(ca_cert_pem, ca_key_pem, body.csr_pem.encode())
+    except ValueError as exc:
+        logger.warning("CSR signing failed for agent %s: %s", body.agent_id, exc)
+        raise HTTPException(status_code=400, detail=f"CSR error: {exc}")
+
+    logger.info("enrolled agent %s", body.agent_id)
+    return EnrollResponse(
+        ca_cert_pem=ca_cert_pem.decode("ascii"),
+        agent_cert_pem=agent_cert_pem.decode("ascii"),
+    )
 
 
 # ---------------------------------------------------------------------------

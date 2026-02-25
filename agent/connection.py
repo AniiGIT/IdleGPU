@@ -8,8 +8,8 @@ The agent always dials out; it never opens an inbound port. This module
 owns the connection lifecycle: hello handshake, idle status updates,
 transparency logging, and reconnect with exponential backoff on failure.
 
-Phase 1 note: connects over plaintext ws://. mTLS (wss://) is added in
-Phase 2. Do not use Phase 1 over an untrusted network.
+Connects over wss:// (mTLS) when an ssl.SSLContext is supplied, or ws://
+in dev mode / when TLS is unconfigured.
 
 Message protocol (JSON):
 
@@ -29,6 +29,7 @@ import asyncio
 import json
 import logging
 import socket
+import ssl
 import uuid
 from pathlib import Path
 
@@ -101,10 +102,16 @@ class BrokerConnection:
     the idle detection loop, and reconnects automatically on failure.
     """
 
-    def __init__(self, cfg: AgentConfig, tlog: TransparencyLog) -> None:
+    def __init__(
+        self,
+        cfg: AgentConfig,
+        tlog: TransparencyLog,
+        ssl_ctx: ssl.SSLContext | None = None,
+    ) -> None:
         data_dir = Path(cfg.logging.transparency_log).parent
         self._cfg = cfg
         self._tlog = tlog
+        self._ssl_ctx = ssl_ctx
         self._agent_id = _load_or_create_agent_id(data_dir)
         self._hostname = socket.gethostname()
 
@@ -131,15 +138,20 @@ class BrokerConnection:
 
     async def _session(self) -> None:
         """Run one connected session until the WebSocket closes."""
-        uri = (
-            f"ws://{self._cfg.broker.host}:{self._cfg.broker.port}/ws/agent"
-        )
+        scheme = "wss" if self._ssl_ctx is not None else "ws"
+        uri = f"{scheme}://{self._cfg.broker.host}:{self._cfg.broker.port}/ws/agent"
         logger.info("connecting to broker at %s", uri)
+
+        connect_kwargs: dict = {
+            "ping_interval": _PING_INTERVAL,
+            "ping_timeout": _PING_TIMEOUT,
+        }
+        if self._ssl_ctx is not None:
+            connect_kwargs["ssl"] = self._ssl_ctx
 
         async with websockets.connect(  # type: ignore[attr-defined]
             uri,
-            ping_interval=_PING_INTERVAL,
-            ping_timeout=_PING_TIMEOUT,
+            **connect_kwargs,
         ) as ws:
             await self._handshake(ws)
 

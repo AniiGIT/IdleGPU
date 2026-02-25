@@ -44,7 +44,17 @@ class ServerSection:
     """Address to bind on. Use 0.0.0.0 for LAN access."""
 
     port: int = 8765
-    """TCP port the broker listens on. Range: 1-65535."""
+    """TCP port the broker listens on (mTLS when configured). Range: 1-65535."""
+
+    enroll_port: int | None = None
+    """
+    Plain HTTP port for agent enrollment (/ca.crt and /enroll only).
+
+    Agents fetch the CA cert and submit their CSR here before they have
+    credentials for the mTLS main port -- solving the chicken-and-egg problem.
+    None means use port + 1 at runtime (default: 8766 when port is 8765).
+    Range: 1-65535.
+    """
 
 
 @dataclass
@@ -149,6 +159,9 @@ def _parse_server(raw: dict) -> ServerSection:  # type: ignore[type-arg]
     s.port = _parse_int(
         raw.get("port", s.port), "server.port", 8765, 1, 65535
     )
+    raw_enroll = raw.get("enroll_port")
+    if raw_enroll is not None:
+        s.enroll_port = _parse_int(raw_enroll, "server.enroll_port", s.port + 1, 1, 65535)
     return s
 
 

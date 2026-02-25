@@ -23,6 +23,9 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     # mTLS certificate generation and HMAC signing (Phase 2)
     "cryptography>=42.0",
+    # TOML serialisation -- used to write [tls] paths back to config files after
+    # `broker setup` and `agent enroll` (tomllib in stdlib only reads, not writes)
+    "tomli-w>=1.0",
 ]
 
 [project.scripts]

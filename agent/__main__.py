@@ -7,12 +7,21 @@ agent/__main__.py - CLI entry point for the IdleGPU agent.
 Usage:
   python -m agent start   [--broker HOST] [--port PORT] [--dev]
   python -m agent stop
+  python -m agent enroll  --broker HOST [--port PORT] --token TOKEN [--data-dir DIR]
   python -m agent status
 
 Commands:
   start    Load config, open the transparency log, and connect to the broker.
+           Connects via mTLS (wss://) when [tls] is configured in agent.toml.
+           Falls back to plaintext ws:// in dev mode or when TLS is unconfigured.
            Runs until interrupted (Ctrl+C or SIGTERM). Reconnects automatically.
   stop     Signal a running agent to exit using the PID file written by start.
+  enroll   Enroll this agent with the broker to obtain mTLS certificates.
+           Fetches the CA cert from the plain HTTP enrollment port, presents
+           its fingerprint for out-of-band verification, submits a CSR with
+           the one-time token, saves ca.crt, agent.crt, and agent.key, and
+           writes [broker] host/port and [tls] paths to agent.toml.
+           Pass --start to connect immediately after enrollment.
   status   One-shot idle check: prints current GPU, CPU, and input idle metrics.
            Does not require the broker to be reachable.
 """
@@ -24,10 +33,12 @@ import asyncio
 import logging
 import os
 import signal
+import ssl
 import sys
+import tomllib
 from pathlib import Path
 
-from .config import AgentConfig, load_config
+from .config import AgentConfig, load_config, system_config_path
 from .transparency_log import TransparencyLog
 
 
@@ -68,21 +79,79 @@ def _remove_pid(pid_file: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Config file helpers
+# ---------------------------------------------------------------------------
+
+
+def _patch_toml_sections(config_path: Path, sections: dict[str, dict]) -> None:
+    """
+    Write or update one or more sections in a TOML config file.
+
+    Reads the existing file (if present), merges each section dict into the
+    parsed data, and writes back using tomli_w. All other sections are
+    preserved. Note: tomli_w does not round-trip comments -- they are not
+    preserved on re-write, but all key/value pairs remain intact.
+
+    On write failure (e.g. permission denied), prints a manual fallback
+    to stderr so the operator is never left without instructions.
+    """
+    try:
+        import tomli_w  # noqa: PLC0415
+    except ImportError:
+        print(
+            "error: tomli-w is not installed. Run: pip install 'tomli-w>=1.0'",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    data: dict = {}
+    if config_path.exists():
+        try:
+            with open(config_path, "rb") as fh:
+                data = tomllib.load(fh)
+        except (OSError, tomllib.TOMLDecodeError):
+            pass  # start fresh; existing file could not be parsed
+
+    data.update(sections)
+
+    try:
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(config_path, "wb") as fh:
+            tomli_w.dump(data, fh)
+    except OSError as exc:
+        print(
+            f"Warning: could not write config to {config_path}: {exc}",
+            file=sys.stderr,
+        )
+        print(
+            "Add the following to your agent.toml manually:",
+            file=sys.stderr,
+        )
+        for section_name, section_values in sections.items():
+            print(f"[{section_name}]", file=sys.stderr)
+            for key, val in section_values.items():
+                val_repr = f'"{val}"' if isinstance(val, str) else str(val)
+                print(f"{key} = {val_repr}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: start
 # ---------------------------------------------------------------------------
 
 
-async def _run_agent(cfg: AgentConfig) -> None:
+async def _run_agent(cfg: AgentConfig, ssl_ctx: ssl.SSLContext | None) -> None:
     """Async entry point for the start command."""
     # Import here so startup errors are clear even if deps are missing.
     from .connection import BrokerConnection  # noqa: PLC0415
 
     tlog = TransparencyLog(cfg.logging)
-    conn = BrokerConnection(cfg, tlog)
+    conn = BrokerConnection(cfg, tlog, ssl_ctx=ssl_ctx)
 
     logger = logging.getLogger(__name__)
     logger.info(
-        "agent starting: broker=%s:%d", cfg.broker.host, cfg.broker.port
+        "agent starting: broker=%s:%d tls=%s",
+        cfg.broker.host, cfg.broker.port,
+        "enabled" if ssl_ctx else "disabled (plaintext)",
     )
 
     await conn.run()
@@ -105,17 +174,43 @@ def cmd_start(args: argparse.Namespace) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
+    logger = logging.getLogger(__name__)
+
     if args.dev:
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "dev mode: plaintext WebSocket, no mTLS. "
             "Do not use on untrusted networks."
+        )
+
+    # Build mTLS context unless dev mode is explicitly requested.
+    ssl_ctx: ssl.SSLContext | None = None
+    if not args.dev and cfg.tls.is_configured():
+        from .pki import check_cert_expiry, load_tls_context  # noqa: PLC0415
+        try:
+            ssl_ctx = load_tls_context(cfg.tls)
+        except (FileNotFoundError, PermissionError) as exc:
+            logger.error("TLS setup failed: %s", exc)
+            sys.exit(1)
+        # Warn if cert is approaching expiry.
+        assert cfg.tls.agent_cert is not None
+        days = check_cert_expiry(Path(cfg.tls.agent_cert).read_bytes())
+        if days < 30:
+            logger.warning(
+                "agent cert expires in %d day(s) -- re-enroll soon: "
+                "idlegpu-agent enroll",
+                days,
+            )
+    elif not args.dev and not cfg.tls.is_configured():
+        logger.warning(
+            "TLS not configured -- connecting in plaintext mode. "
+            "Run `idlegpu-agent enroll` to set up mTLS."
         )
 
     pid_file = _pid_file(cfg)
     _write_pid(pid_file)
 
     try:
-        asyncio.run(_run_agent(cfg))
+        asyncio.run(_run_agent(cfg, ssl_ctx))
     except KeyboardInterrupt:
         print("\nidlegpu-agent stopped.")
     finally:
@@ -171,6 +266,126 @@ def cmd_stop(_args: argparse.Namespace) -> None:
     # running briefly, but the file is no longer valid.
     _remove_pid(pid_file)
     print(f"Sent SIGTERM to agent process {pid}.")
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: enroll
+# ---------------------------------------------------------------------------
+
+
+def cmd_enroll(args: argparse.Namespace) -> None:
+    """
+    Enroll this agent with the broker to obtain mTLS certificates.
+
+    Fetches the CA cert from the plain HTTP enrollment port, presents its
+    SHA-256 fingerprint to the operator for out-of-band verification, then
+    generates an ECDSA P-256 keypair and CSR, submits it with the one-time
+    token, saves the certificate files, and writes [tls] paths to agent.toml.
+
+    Pass --start to connect to the broker immediately after enrollment.
+    """
+    from .pki import cert_fingerprint, enroll, fetch_ca_cert  # noqa: PLC0415
+
+    cfg = load_config()
+
+    # Derive data directory from transparency log path (same as connection.py).
+    data_dir = _data_dir(cfg)
+    if args.data_dir is not None:
+        data_dir = Path(args.data_dir)
+
+    # Allow the agent_id to be pre-loaded from the existing identity file if
+    # it already exists, so enrolled certs match the running agent.
+    agent_id_file = data_dir / "agent_id"
+    if agent_id_file.exists():
+        agent_id = agent_id_file.read_text(encoding="ascii").strip()
+    else:
+        import uuid  # noqa: PLC0415
+        agent_id = str(uuid.uuid4())
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    # Effective enrollment port: explicit flag, or main port + 1.
+    enroll_port = args.enroll_port if args.enroll_port is not None else args.port + 1
+
+    print(f"Enrolling agent {agent_id}")
+    print(f"  Broker      : {args.broker}:{args.port}")
+    print(f"  Enroll port : {enroll_port}")
+    print()
+
+    # Step 1: fetch CA cert from the plain HTTP enrollment port.
+    try:
+        ca_cert_pem = fetch_ca_cert(args.broker, enroll_port)
+    except Exception as exc:
+        print(f"error: could not fetch CA cert: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    # Step 2: interactive fingerprint confirmation (TOFU).
+    fingerprint = cert_fingerprint(ca_cert_pem)
+    print("CA certificate fingerprint (SHA-256):")
+    print(f"  {fingerprint}")
+    print()
+    print("Compare this fingerprint with the one printed by `idlegpu-broker setup`.")
+    print("If they do not match, abort and investigate before proceeding.")
+    print()
+
+    try:
+        answer = input("Does this fingerprint match? [y/N] ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nAborted.")
+        sys.exit(1)
+
+    if answer.lower() != "y":
+        print("Enrollment aborted.")
+        sys.exit(1)
+
+    print()
+
+    # Step 3: generate keypair/CSR, POST to broker, save certs.
+    try:
+        enroll(
+            broker_host=args.broker,
+            enroll_port=enroll_port,
+            token=args.token,
+            agent_id=agent_id,
+            data_dir=data_dir,
+            ca_cert_pem=ca_cert_pem,
+        )
+    except Exception as exc:
+        print(f"Enrollment failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    ca_path = data_dir / "ca.crt"
+    cert_path = data_dir / "agent.crt"
+    key_path = data_dir / "agent.key"
+
+    config_path = system_config_path()
+    _patch_toml_sections(config_path, {
+        "broker": {
+            "host": args.broker,
+            "port": args.port,
+        },
+        "tls": {
+            "ca_cert":    str(ca_path),
+            "agent_cert": str(cert_path),
+            "agent_key":  str(key_path),
+        },
+    })
+
+    print("Enrollment successful.")
+    print(f"[broker] and [tls] written to {config_path}.")
+    print()
+
+    if args.start:
+        print("Starting agent (Ctrl+C to stop)...")
+        print()
+        cmd_start(argparse.Namespace(broker=None, port=None, dev=False))
+    else:
+        print("The agent is ready. Start it with:")
+        print("  idlegpu-agent start")
 
 
 # ---------------------------------------------------------------------------
@@ -251,11 +466,59 @@ def _build_parser() -> argparse.ArgumentParser:
     p_start.add_argument(
         "--dev",
         action="store_true",
-        help="Enable debug logging (plaintext mode, no mTLS).",
+        help="Enable debug logging and force plaintext ws:// (no mTLS).",
     )
 
     # stop
     sub.add_parser("stop", help="Signal a running agent to exit.")
+
+    # enroll
+    p_enroll = sub.add_parser(
+        "enroll",
+        help="Obtain mTLS certificates from the broker.",
+    )
+    p_enroll.add_argument(
+        "--broker",
+        required=True,
+        metavar="HOST",
+        help="Broker hostname or IP.",
+    )
+    p_enroll.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        metavar="PORT",
+        help="Broker main port (default: 8765).",
+    )
+    p_enroll.add_argument(
+        "--enroll-port",
+        type=int,
+        default=None,
+        metavar="PORT",
+        dest="enroll_port",
+        help=(
+            "Broker enrollment port for CA cert fetch and CSR submission "
+            "(plain HTTP). Default: main port + 1."
+        ),
+    )
+    p_enroll.add_argument(
+        "--token",
+        required=True,
+        metavar="TOKEN",
+        help="One-time enrollment token from `idlegpu-broker setup`.",
+    )
+    p_enroll.add_argument(
+        "--data-dir",
+        default=None,
+        metavar="DIR",
+        dest="data_dir",
+        help="Directory to save certificates (default: agent data dir).",
+    )
+    p_enroll.add_argument(
+        "--start",
+        action="store_true",
+        help="Start the agent immediately after enrollment completes.",
+    )
 
     # status
     sub.add_parser("status", help="Print current idle metrics (no broker needed).")
@@ -270,6 +533,7 @@ def main() -> None:
     dispatch = {
         "start": cmd_start,
         "stop": cmd_stop,
+        "enroll": cmd_enroll,
         "status": cmd_status,
     }
 

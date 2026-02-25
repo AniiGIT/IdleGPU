@@ -95,6 +95,12 @@ For transparency, the core security decisions in IdleGPU are:
 - The agent runs as a restricted low-privilege service account with no shell access
 - The gaming PC never opens inbound ports — the agent always dials out
 - All agent ↔ broker traffic uses mutual TLS (mTLS) — both sides authenticate
+- Certificates use ECDSA P-256 keys; the local CA and all agent certs are generated
+  by the broker via `idlegpu-broker setup` and `idlegpu-agent enroll`
+- Enrollment tokens are 32-byte random secrets, single-use, and compared with a
+  constant-time digest to prevent timing attacks
+- Private key files are written with mode 600 on Linux; the CA private key never
+  leaves the broker host
 - Job payloads are signed with HMAC-SHA256 — tampering is detectable
 - Docker containers run with no host filesystem access beyond explicit scratch volumes
 - The CUDA shim is fully open source — every line of what is injected is auditable

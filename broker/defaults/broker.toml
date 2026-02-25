@@ -27,10 +27,24 @@
 # Valid: any IPv4/IPv6 address or hostname.
 host = "0.0.0.0"
 
-# TCP port the broker listens on.
+# TCP port the broker listens on (mTLS when [tls] is configured).
 # Agents must use the same port in their [broker] config.
 # Valid range: 1-65535
 port = 8765
+
+# Plain HTTP port for agent enrollment only (/ca.crt and /enroll).
+#
+# Why this exists: agents need the broker's CA certificate before they can
+# establish a mutual TLS connection to the main port. This enrollment port
+# serves only those two unauthenticated bootstrap endpoints over plain HTTP,
+# solving the chicken-and-egg problem.
+#
+# The main port (above) handles all other traffic and enforces mTLS when
+# [tls] is configured.
+#
+# Default: port + 1 (i.e., 8766 when port is 8765).
+# Uncomment to override:
+# enroll_port = 8766
 
 
 # ---------------------------------------------------------------------------

@@ -84,12 +84,35 @@ class LoggingSection:
 
 
 @dataclass
+class TlsSection:
+    """Mutual TLS certificate paths. All None = plaintext mode (dev only)."""
+
+    ca_cert: str | None = None
+    """Path to the CA certificate PEM used to verify the broker's identity."""
+
+    agent_cert: str | None = None
+    """Path to this agent's TLS certificate PEM file."""
+
+    agent_key: str | None = None
+    """Path to this agent's TLS private key PEM file (mode 600 on Linux)."""
+
+    def is_configured(self) -> bool:
+        """Return True when all three TLS paths are set."""
+        return (
+            self.ca_cert is not None
+            and self.agent_cert is not None
+            and self.agent_key is not None
+        )
+
+
+@dataclass
 class AgentConfig:
     """Complete agent configuration. All fields have safe defaults."""
 
     idle: IdleSection = field(default_factory=IdleSection)
     broker: BrokerSection = field(default_factory=BrokerSection)
     logging: LoggingSection = field(default_factory=LoggingSection)
+    tls: TlsSection = field(default_factory=TlsSection)
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +162,16 @@ def _parse_nonempty_str(value: object, key: str, default: str) -> str:
             "config: %s must be a non-empty string, using default %r", key, default
         )
         return default
+    return value
+
+
+def _parse_optional_path(value: object, key: str) -> str | None:
+    """Parse an optional file path string. Returns None if absent or empty."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        logger.warning("config: %s must be a non-empty string; ignoring", key)
+        return None
     return value
 
 
@@ -207,6 +240,14 @@ def _parse_logging(raw: dict) -> LoggingSection:  # type: ignore[type-arg]
         s.transparency_log = _parse_nonempty_str(
             tlog, "logging.transparency_log", s.transparency_log
         )
+    return s
+
+
+def _parse_tls(raw: dict) -> TlsSection:  # type: ignore[type-arg]
+    s = TlsSection()
+    s.ca_cert = _parse_optional_path(raw.get("ca_cert"), "tls.ca_cert")
+    s.agent_cert = _parse_optional_path(raw.get("agent_cert"), "tls.agent_cert")
+    s.agent_key = _parse_optional_path(raw.get("agent_key"), "tls.agent_key")
     return s
 
 
@@ -281,4 +322,5 @@ def load_config(path: Path | None = None) -> AgentConfig:
         idle=_parse_idle(raw.get("idle", {})),
         broker=_parse_broker(raw.get("broker", {})),
         logging=_parse_logging(raw.get("logging", {})),
+        tls=_parse_tls(raw.get("tls", {})),
     )

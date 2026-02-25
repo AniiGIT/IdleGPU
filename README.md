@@ -58,10 +58,10 @@ The gaming PC **never has an open inbound port**. The agent always dials out to 
 
 ```bash
 pip install idlegpu-agent
-idlegpu-agent --broker broker.yourdomain.local
+idlegpu-agent start --broker broker.yourdomain.local
 ```
 
-Or as a Windows Service / systemd unit:
+Or as a Windows Service / systemd unit (Phase 3):
 
 ```bash
 idlegpu-agent install --broker broker.yourdomain.local
@@ -100,6 +100,70 @@ volumes:
 ```
 
 That is the entire integration. No CUDA drivers needed on the server. No GPU needed on the server. No changes to Unmanic, Ollama, or any other container.
+
+---
+
+## Getting Started: Certificates
+
+IdleGPU uses mutual TLS (mTLS) so both the agent and the broker authenticate each other. Run these steps once before starting the broker in production.
+
+### 1. Generate the CA and broker certificate (on the broker host)
+
+```bash
+idlegpu-broker setup
+```
+
+This generates a local CA, a broker TLS certificate, and a one-time enrollment token. It automatically writes the `[tls]` paths into the system config file (`/etc/idlegpu/broker.toml` on Linux, `%PROGRAMDATA%\idlegpu\broker.toml` on Windows) — no manual editing required.
+
+It prints:
+- The CA certificate **fingerprint** (SHA-256) — share this out-of-band with anyone enrolling an agent
+- The exact `idlegpu-agent enroll` command pre-filled with the token and broker hostname
+- The enrollment port (plain HTTP, default: main port + 1, e.g. 8766)
+
+### 2. Start the broker (or pass `--start` to setup)
+
+```bash
+idlegpu-broker start
+# or in one step:
+idlegpu-broker setup --start
+```
+
+The broker listens on two ports:
+- **Main port** (default 8765): mTLS WebSocket and REST API — agents connect here after enrollment
+- **Enrollment port** (default 8766): plain HTTP, serves only `/ca.crt` and `/enroll` — used once to bootstrap agent certificates before they hold client credentials
+
+### 3. Enroll each agent (on the gaming PC)
+
+```bash
+idlegpu-agent enroll --broker broker.yourdomain.local --token <token>
+```
+
+The agent:
+1. Fetches the CA certificate from the broker's enrollment port (plain HTTP)
+2. Prints the CA fingerprint and prompts you to confirm it matches the one printed by `idlegpu-broker setup`
+3. Generates an ECDSA P-256 key pair and CSR
+4. Submits the CSR to the broker with the one-time token
+5. Saves `ca.crt`, `agent.crt`, and `agent.key` to the agent data directory
+6. Automatically writes `[broker]` (host and port) and `[tls]` paths into the agent config file — no manual editing required
+
+The fingerprint confirmation is your trust anchor — it prevents a machine-in-the-middle from substituting its own CA during bootstrap. If the fingerprints don't match, press Enter (default `N`) to abort.
+
+Start the agent (or pass `--start` to enroll):
+
+```bash
+idlegpu-agent start
+# or in one step:
+idlegpu-agent enroll --broker broker.yourdomain.local --token <token> --start
+```
+
+### Dev mode (no certificates required)
+
+```bash
+idlegpu-broker start --dev
+idlegpu-agent start --dev
+```
+
+Dev mode uses plaintext `ws://` with no authentication. Never use it on an untrusted network.
 
 ---
 
@@ -187,17 +251,18 @@ IdleGPU is fully open source under AGPL-3.0. Every security claim above correspo
 
 ## Roadmap
 
-### v0.1 — Foundation
+### v0.1 — Foundation (complete)
 
-- [ ] Idle detection (GPU %, CPU %, input idle time)
-- [ ] Agent ↔ Broker mTLS WebSocket connection
-- [ ] Broker agent registry and status API
-- [ ] Transparency log
-- [ ] Basic CLI (`idlegpu-agent start/stop/status`)
-- [ ] Windows and Linux support
+- [x] Idle detection (GPU %, CPU %, input idle time)
+- [x] Agent ↔ Broker WebSocket connection with mTLS
+- [x] Broker agent registry and status API
+- [x] Transparency log
+- [x] Basic CLI (`idlegpu-agent start/stop/status/enroll`)
+- [x] Windows and Linux support
 
-### v0.2 — CUDA Forwarding
+### v0.2 — CUDA Forwarding (current)
 
+- [x] mTLS certificate provisioning (`idlegpu-broker setup`, `idlegpu-agent enroll`)
 - [ ] CUDA intercept shim (`libidlegpu-cuda.so`)
 - [ ] Docker sidecar image
 - [ ] FFmpeg/NVENC forwarding for encoding workloads

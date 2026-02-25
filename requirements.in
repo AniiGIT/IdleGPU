@@ -18,3 +18,10 @@ websockets>=12.0
 # Broker REST API and WebSocket server.
 fastapi>=0.110
 uvicorn[standard]>=0.29
+
+# mTLS certificate generation and CSR signing (agent enrollment, Phase 2).
+cryptography>=42.0
+
+# TOML serialisation for writing [tls] paths back to config files after
+# `broker setup` and `agent enroll` (stdlib tomllib only reads, not writes).
+tomli-w>=1.0
