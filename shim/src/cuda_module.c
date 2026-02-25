@@ -48,7 +48,7 @@
 
 __attribute__((visibility("default")))
 CUresult cuModuleLoad(CUmodule *module, const char *fname) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuModuleLoad, module, fname);
 
     if (fname == NULL || module == NULL) {
         return CUDA_ERROR_INVALID_VALUE;
@@ -86,7 +86,7 @@ CUresult cuModuleLoad(CUmodule *module, const char *fname) {
 
 __attribute__((visibility("default")))
 CUresult cuModuleLoadData(CUmodule *module, const void *image) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuModuleLoadData, module, image);
 
     if (image == NULL || module == NULL) {
         return CUDA_ERROR_INVALID_VALUE;
@@ -129,7 +129,7 @@ CUresult cuModuleLoadData(CUmodule *module, const void *image) {
 
 __attribute__((visibility("default")))
 CUresult cuModuleGetFunction(CUfunction *hfunc, CUmodule hmod, const char *name) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuModuleGetFunction, hfunc, hmod, name);
 
     if (hfunc == NULL || hmod == NULL || name == NULL) {
         return CUDA_ERROR_INVALID_VALUE;
@@ -178,7 +178,10 @@ CUresult cuLaunchKernel(
     void       **kernelParams,
     void       **extra        // must be NULL per driver spec when using kernelParams
 ) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuLaunchKernel, f,
+                     gridDimX, gridDimY, gridDimZ,
+                     blockDimX, blockDimY, blockDimZ,
+                     sharedMemBytes, hStream, kernelParams, extra);
 
     if (extra != NULL) {
         // The CUDA driver forbids setting both kernelParams and extra.
@@ -245,7 +248,7 @@ CUresult cuLaunchKernel(
 
 __attribute__((visibility("default")))
 CUresult cuModuleUnload(CUmodule hmod) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuModuleUnload, hmod);
 
     Req_cuModuleUnload req = { .mod_handle = PTR_TO_HANDLE(hmod) };
     return ipc_call(FN_cuModuleUnload, &req, sizeof(req), NULL, 0, NULL);

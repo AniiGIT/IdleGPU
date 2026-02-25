@@ -36,7 +36,7 @@
 
 __attribute__((visibility("default")))
 CUresult cuMemAlloc(CUdeviceptr *dptr, size_t bytesize) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuMemAlloc, dptr, bytesize);
 
     Req_cuMemAlloc  req  = { .bytesize = (uint64_t)bytesize };
     Resp_cuMemAlloc resp = { 0 };
@@ -58,7 +58,7 @@ CUresult cuMemAlloc_v2(CUdeviceptr *dptr, size_t bytesize) {
 
 __attribute__((visibility("default")))
 CUresult cuMemFree(CUdeviceptr dptr) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuMemFree, dptr);
 
     Req_cuMemFree req = { .dptr = (uint64_t)dptr };
     return ipc_call(FN_cuMemFree, &req, sizeof(req), NULL, 0, NULL);
@@ -73,7 +73,7 @@ CUresult cuMemFree_v2(CUdeviceptr dptr) {
 
 __attribute__((visibility("default")))
 CUresult cuMemcpyHtoD(CUdeviceptr dstDevice, const void *srcHost, size_t ByteCount) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuMemcpyHtoD, dstDevice, srcHost, ByteCount);
 
     if (ByteCount > IPC_MAX_PAYLOAD) {
         SHIM_WARN("cuMemcpyHtoD: ByteCount %zu exceeds IPC_MAX_PAYLOAD; failing",
@@ -111,7 +111,7 @@ CUresult cuMemcpyHtoD_v2(CUdeviceptr dstDevice, const void *srcHost, size_t Byte
 
 __attribute__((visibility("default")))
 CUresult cuMemcpyDtoH(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuMemcpyDtoH, dstHost, srcDevice, ByteCount);
 
     if (ByteCount > IPC_MAX_PAYLOAD) {
         SHIM_WARN("cuMemcpyDtoH: ByteCount %zu exceeds IPC_MAX_PAYLOAD; failing",
@@ -139,7 +139,7 @@ CUresult cuMemcpyDtoH_v2(void *dstHost, CUdeviceptr srcDevice, size_t ByteCount)
 
 __attribute__((visibility("default")))
 CUresult cuMemcpyDtoD(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t ByteCount) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuMemcpyDtoD, dstDevice, srcDevice, ByteCount);
 
     Req_cuMemcpyDtoD req = {
         .dst        = (uint64_t)dstDevice,
@@ -158,7 +158,7 @@ CUresult cuMemcpyDtoD_v2(CUdeviceptr dstDevice, CUdeviceptr srcDevice, size_t By
 
 __attribute__((visibility("default")))
 CUresult cuMemsetD8(CUdeviceptr dstDevice, unsigned char uc, size_t N) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuMemsetD8, dstDevice, uc, N);
 
     Req_cuMemsetD8 req = {
         .dst   = (uint64_t)dstDevice,
@@ -177,7 +177,7 @@ CUresult cuMemsetD8_v2(CUdeviceptr dstDevice, unsigned char uc, size_t N) {
 
 __attribute__((visibility("default")))
 CUresult cuMemsetD16(CUdeviceptr dstDevice, unsigned short us, size_t N) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuMemsetD16, dstDevice, us, N);
 
     Req_cuMemsetD16 req = {
         .dst   = (uint64_t)dstDevice,
@@ -196,7 +196,7 @@ CUresult cuMemsetD16_v2(CUdeviceptr dstDevice, unsigned short us, size_t N) {
 
 __attribute__((visibility("default")))
 CUresult cuMemsetD32(CUdeviceptr dstDevice, unsigned int ui, size_t N) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuMemsetD32, dstDevice, ui, N);
 
     Req_cuMemsetD32 req = {
         .dst   = (uint64_t)dstDevice,
@@ -215,7 +215,7 @@ CUresult cuMemsetD32_v2(CUdeviceptr dstDevice, unsigned int ui, size_t N) {
 
 __attribute__((visibility("default")))
 CUresult cuMemGetInfo(size_t *free, size_t *total) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuMemGetInfo, free, total);
 
     Resp_cuMemGetInfo resp = { 0 };
     CUresult r = ipc_call(FN_cuMemGetInfo, NULL, 0,

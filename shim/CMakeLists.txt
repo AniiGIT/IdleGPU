@@ -20,6 +20,7 @@ set(CMAKE_C_EXTENSIONS OFF)
 add_library(idlegpu-cuda SHARED
     src/shim_main.c
     src/ipc.c
+    src/real_cuda.c
     src/cuda_init.c
     src/cuda_mem.c
     src/cuda_module.c

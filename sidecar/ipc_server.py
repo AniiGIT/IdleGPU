@@ -65,6 +65,11 @@ class IpcServer:
             self._handle_connection,
             path=self._socket_path,
         )
+        # Make the socket world-writable so processes running as a different
+        # UID (e.g. the Unmanic container) can connect.  The sidecar still
+        # validates all calls through the IPC protocol; this is not a security
+        # boundary — both containers share the same Docker network volume.
+        os.chmod(self._socket_path, 0o666)
         logger.info("ipc_server: listening on %s", self._socket_path)
 
         async with server:

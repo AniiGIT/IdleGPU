@@ -37,7 +37,8 @@
 __attribute__((visibility("default")))
 CUresult cuInit(unsigned int Flags) {
     if (!g_ipc_connected) {
-        // If the sidecar isn't running, report no device (standard failure mode).
+        // Prefer local GPU; CUDA_ERROR_NO_DEVICE if no real driver available.
+        if (g_real.cuInit != NULL) return g_real.cuInit(Flags);
         return CUDA_ERROR_NO_DEVICE;
     }
 
@@ -49,7 +50,7 @@ CUresult cuInit(unsigned int Flags) {
 
 __attribute__((visibility("default")))
 CUresult cuDeviceGet(CUdevice *device, int ordinal) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuDeviceGet, device, ordinal);
 
     Req_cuDeviceGet  req  = { .ordinal = ordinal };
     Resp_cuDeviceGet resp = { 0 };
@@ -66,7 +67,7 @@ CUresult cuDeviceGet(CUdevice *device, int ordinal) {
 
 __attribute__((visibility("default")))
 CUresult cuDeviceGetCount(int *count) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuDeviceGetCount, count);
 
     // Request payload: empty.
     int32_t resp_count = 0;
@@ -82,7 +83,7 @@ CUresult cuDeviceGetCount(int *count) {
 
 __attribute__((visibility("default")))
 CUresult cuDeviceGetName(char *name, int len, CUdevice dev) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuDeviceGetName, name, len, dev);
 
     if (name == NULL || len <= 0) {
         return CUDA_ERROR_INVALID_VALUE;
@@ -107,7 +108,7 @@ CUresult cuDeviceGetName(char *name, int len, CUdevice dev) {
 
 __attribute__((visibility("default")))
 CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuDeviceGetAttribute, pi, attrib, dev);
 
     Req_cuDeviceGetAttribute  req  = {
         .attrib = (int32_t)attrib,
@@ -127,7 +128,7 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
 
 __attribute__((visibility("default")))
 CUresult cuDeviceTotalMem(size_t *bytes, CUdevice dev) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuDeviceTotalMem, bytes, dev);
 
     Req_cuDeviceTotalMem  req  = { .device = (int32_t)dev };
     Resp_cuDeviceTotalMem resp = { 0 };
@@ -150,7 +151,7 @@ CUresult cuDeviceTotalMem_v2(size_t *bytes, CUdevice dev) {
 
 __attribute__((visibility("default")))
 CUresult cuCtxCreate(CUcontext *pctx, unsigned int flags, CUdevice dev) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuCtxCreate, pctx, flags, dev);
 
     Req_cuCtxCreate  req  = {
         .flags  = (uint32_t)flags,
@@ -176,7 +177,7 @@ CUresult cuCtxCreate_v2(CUcontext *pctx, unsigned int flags, CUdevice dev) {
 
 __attribute__((visibility("default")))
 CUresult cuCtxDestroy(CUcontext ctx) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuCtxDestroy, ctx);
 
     Req_cuCtxDestroy req = { .ctx_handle = PTR_TO_HANDLE(ctx) };
     return ipc_call(FN_cuCtxDestroy, &req, sizeof(req), NULL, 0, NULL);
@@ -191,7 +192,7 @@ CUresult cuCtxDestroy_v2(CUcontext ctx) {
 
 __attribute__((visibility("default")))
 CUresult cuCtxSetCurrent(CUcontext ctx) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuCtxSetCurrent, ctx);
 
     Req_cuCtxSetCurrent req = { .ctx_handle = PTR_TO_HANDLE(ctx) };
     return ipc_call(FN_cuCtxSetCurrent, &req, sizeof(req), NULL, 0, NULL);
@@ -201,7 +202,7 @@ CUresult cuCtxSetCurrent(CUcontext ctx) {
 
 __attribute__((visibility("default")))
 CUresult cuCtxGetCurrent(CUcontext *pctx) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuCtxGetCurrent, pctx);
 
     Resp_cuCtxGetCurrent resp = { 0 };
     CUresult r = ipc_call(FN_cuCtxGetCurrent, NULL, 0,

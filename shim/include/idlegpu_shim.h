@@ -338,9 +338,78 @@ void idlegpu_log(const char *level, const char *fmt, ...);
     } while (0)
 
 // Return CUDA_ERROR_NOT_INITIALIZED if the IPC connection is down.
+// Used in nvenc.c and stubs.c where no real-CUDA fallback exists.
 #define SHIM_CHECK_CONNECTED() \
     do { \
         if (!g_ipc_connected) { \
+            return CUDA_ERROR_NOT_INITIALIZED; \
+        } \
+    } while (0)
+
+// ── Real CUDA function pointer table (defined in real_cuda.c) ─────────────────
+//
+// Loaded at shim startup via RTLD_NEXT.  Used as local-GPU fallback when the
+// IPC connection to the sidecar is not available.  All pointers are NULL if
+// libcuda.so.1 is not in the process's link chain at construction time.
+
+typedef struct {
+    // Tier 1 init / device
+    CUresult (*cuInit)(unsigned int flags);
+    CUresult (*cuDeviceGet)(CUdevice *device, int ordinal);
+    CUresult (*cuDeviceGetCount)(int *count);
+    CUresult (*cuDeviceGetName)(char *name, int len, CUdevice dev);
+    CUresult (*cuDeviceGetAttribute)(int *pi, CUdevice_attribute attrib, CUdevice dev);
+    CUresult (*cuDeviceTotalMem)(size_t *bytes, CUdevice dev);
+    CUresult (*cuCtxCreate)(CUcontext *pctx, unsigned int flags, CUdevice dev);
+    CUresult (*cuCtxDestroy)(CUcontext ctx);
+    CUresult (*cuCtxSetCurrent)(CUcontext ctx);
+    CUresult (*cuCtxGetCurrent)(CUcontext *pctx);
+    // Tier 1 memory
+    CUresult (*cuMemAlloc)(CUdeviceptr *dptr, size_t bytesize);
+    CUresult (*cuMemFree)(CUdeviceptr dptr);
+    CUresult (*cuMemcpyHtoD)(CUdeviceptr dst, const void *src, size_t n);
+    CUresult (*cuMemcpyDtoH)(void *dst, CUdeviceptr src, size_t n);
+    CUresult (*cuMemcpyDtoD)(CUdeviceptr dst, CUdeviceptr src, size_t n);
+    CUresult (*cuMemsetD8)(CUdeviceptr dst, unsigned char val, size_t n);
+    CUresult (*cuMemsetD16)(CUdeviceptr dst, unsigned short val, size_t n);
+    CUresult (*cuMemsetD32)(CUdeviceptr dst, unsigned int val, size_t n);
+    CUresult (*cuMemGetInfo)(size_t *free, size_t *total);
+    // Tier 1 module / kernel
+    CUresult (*cuModuleLoad)(CUmodule *mod, const char *fname);
+    CUresult (*cuModuleLoadData)(CUmodule *mod, const void *image);
+    CUresult (*cuModuleGetFunction)(CUfunction *fn, CUmodule mod, const char *name);
+    CUresult (*cuLaunchKernel)(CUfunction f,
+                               unsigned int gx, unsigned int gy, unsigned int gz,
+                               unsigned int bx, unsigned int by, unsigned int bz,
+                               unsigned int sharedMem, CUstream stream,
+                               void **params, void **extra);
+    CUresult (*cuModuleUnload)(CUmodule mod);
+    // Tier 1 stream / sync
+    CUresult (*cuStreamCreate)(CUstream *phStream, unsigned int flags);
+    CUresult (*cuStreamDestroy)(CUstream stream);
+    CUresult (*cuStreamSynchronize)(CUstream stream);
+    CUresult (*cuStreamWaitEvent)(CUstream stream, CUevent event, unsigned int flags);
+    CUresult (*cuEventCreate)(CUevent *phEvent, unsigned int flags);
+    CUresult (*cuEventDestroy)(CUevent event);
+    CUresult (*cuEventRecord)(CUevent event, CUstream stream);
+    CUresult (*cuEventSynchronize)(CUevent event);
+} RealCuda;
+
+// Global real CUDA function pointer table (defined in real_cuda.c).
+extern RealCuda g_real;
+
+// Populate g_real from the real libcuda.so.1 via RTLD_NEXT.
+// bootstrap_dlsym: the real dlsym() obtained via dlvsym() before our dlsym
+//   override is active — avoids infinite recursion.
+void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *));
+
+// If IPC is connected, fall through to the IPC path.
+// If IPC is NOT connected, call the real CUDA function (local GPU fallback) if
+// available, otherwise return CUDA_ERROR_NOT_INITIALIZED.
+#define SHIM_REQUIRE_IPC(fn_ptr, ...) \
+    do { \
+        if (!g_ipc_connected) { \
+            if ((fn_ptr) != NULL) return (fn_ptr)(__VA_ARGS__); \
             return CUDA_ERROR_NOT_INITIALIZED; \
         } \
     } while (0)

@@ -23,7 +23,7 @@
 
 __attribute__((visibility("default")))
 CUresult cuStreamCreate(CUstream *phStream, unsigned int Flags) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuStreamCreate, phStream, Flags);
 
     Req_cuStreamCreate  req  = { .flags = Flags };
     Resp_cuStreamCreate resp = { 0 };
@@ -40,7 +40,7 @@ CUresult cuStreamCreate(CUstream *phStream, unsigned int Flags) {
 
 __attribute__((visibility("default")))
 CUresult cuStreamDestroy(CUstream hStream) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuStreamDestroy, hStream);
 
     Req_cuStreamDestroy req = { .stream_handle = PTR_TO_HANDLE(hStream) };
     return ipc_call(FN_cuStreamDestroy, &req, sizeof(req), NULL, 0, NULL);
@@ -55,7 +55,7 @@ CUresult cuStreamDestroy_v2(CUstream hStream) {
 
 __attribute__((visibility("default")))
 CUresult cuStreamSynchronize(CUstream hStream) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuStreamSynchronize, hStream);
 
     Req_cuStreamSynchronize req = { .stream_handle = PTR_TO_HANDLE(hStream) };
     return ipc_call(FN_cuStreamSynchronize, &req, sizeof(req), NULL, 0, NULL);
@@ -65,7 +65,7 @@ CUresult cuStreamSynchronize(CUstream hStream) {
 
 __attribute__((visibility("default")))
 CUresult cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int Flags) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuStreamWaitEvent, hStream, hEvent, Flags);
 
     Req_cuStreamWaitEvent req = {
         .stream_handle = PTR_TO_HANDLE(hStream),
@@ -79,7 +79,7 @@ CUresult cuStreamWaitEvent(CUstream hStream, CUevent hEvent, unsigned int Flags)
 
 __attribute__((visibility("default")))
 CUresult cuEventCreate(CUevent *phEvent, unsigned int Flags) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuEventCreate, phEvent, Flags);
 
     Req_cuEventCreate  req  = { .flags = Flags };
     Resp_cuEventCreate resp = { 0 };
@@ -96,7 +96,7 @@ CUresult cuEventCreate(CUevent *phEvent, unsigned int Flags) {
 
 __attribute__((visibility("default")))
 CUresult cuEventDestroy(CUevent hEvent) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuEventDestroy, hEvent);
 
     Req_cuEventDestroy req = { .event_handle = PTR_TO_HANDLE(hEvent) };
     return ipc_call(FN_cuEventDestroy, &req, sizeof(req), NULL, 0, NULL);
@@ -111,7 +111,7 @@ CUresult cuEventDestroy_v2(CUevent hEvent) {
 
 __attribute__((visibility("default")))
 CUresult cuEventRecord(CUevent hEvent, CUstream hStream) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuEventRecord, hEvent, hStream);
 
     Req_cuEventRecord req = {
         .event_handle  = PTR_TO_HANDLE(hEvent),
@@ -124,7 +124,7 @@ CUresult cuEventRecord(CUevent hEvent, CUstream hStream) {
 
 __attribute__((visibility("default")))
 CUresult cuEventSynchronize(CUevent hEvent) {
-    SHIM_CHECK_CONNECTED();
+    SHIM_REQUIRE_IPC(g_real.cuEventSynchronize, hEvent);
 
     Req_cuEventSynchronize req = { .event_handle = PTR_TO_HANDLE(hEvent) };
     return ipc_call(FN_cuEventSynchronize, &req, sizeof(req), NULL, 0, NULL);
