@@ -340,6 +340,13 @@ extern uint32_t g_call_id;
 // Mutex serialising IPC calls (single connection shared by all threads).
 extern pthread_mutex_t g_ipc_mutex;
 
+// Number of local CUDA devices detected at shim startup via g_real.cuDeviceGetCount.
+// 0 if no local NVIDIA driver is present.  Used by device-routing functions in
+// cuda_init.c to map virtual device indices:
+//   0 .. g_local_device_count-1  → local real driver
+//   g_local_device_count .. N    → remote agent via IPC
+extern int g_local_device_count;
+
 static inline uint32_t shim_next_call_id(void) {
     // Protected by g_ipc_mutex in ipc_call(); safe for single-threaded use.
     return ++g_call_id;
@@ -436,5 +443,15 @@ void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *));
         if (!g_ipc_connected) { \
             if ((fn_ptr) != NULL) return (fn_ptr)(__VA_ARGS__); \
             return CUDA_ERROR_NOT_INITIALIZED; \
+        } \
+    } while (0)
+
+// After an ipc_call() that may have timed out and marked the connection dead,
+// attempt a local GPU fallback if the function pointer is available.
+// Only triggers when g_ipc_connected has just been set to 0 by ipc_mark_dead().
+#define SHIM_FALLBACK_IF_DEAD(fn_ptr, ...) \
+    do { \
+        if (!g_ipc_connected && (fn_ptr) != NULL) { \
+            return (fn_ptr)(__VA_ARGS__); \
         } \
     } while (0)

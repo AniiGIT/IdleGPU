@@ -9,9 +9,28 @@
  *   cuDeviceGetAttribute, cuDeviceTotalMem,
  *   cuCtxCreate, cuCtxDestroy, cuCtxSetCurrent, cuCtxGetCurrent
  *
- * Each function serialises its arguments into the matching Req_* struct
- * (defined in idlegpu_shim.h), calls ipc_call(), and deserialises the
- * Resp_* struct back into the caller's output pointers.
+ * Multi-GPU device routing
+ * ─────────────────────────
+ * Virtual device index space exposed to the application:
+ *
+ *   [0 .. g_local_device_count - 1]  → real local CUDA driver
+ *   [g_local_device_count .. N]      → remote agent GPU via IPC
+ *
+ * cuDeviceGetCount returns the sum of local + remote (0 or 1) counts.
+ * Device-indexed functions (cuDeviceGet, cuDeviceGetName, etc.) inspect
+ * the ordinal / CUdevice value and dispatch accordingly.
+ *
+ * For context lifecycle (cuCtxDestroy, cuCtxSetCurrent, cuCtxGetCurrent)
+ * the device is unknown, so they use SHIM_REQUIRE_IPC: IPC if available,
+ * local otherwise.  SHIM_FALLBACK_IF_DEAD provides a post-timeout fallback
+ * for read-only operations where falling back to local is harmless.
+ *
+ * IPC timeout handling
+ * ─────────────────────
+ * If an IPC call times out, ipc_call() marks the connection dead
+ * (g_ipc_connected = 0) and returns CUDA_ERROR_NOT_INITIALIZED.
+ * Callers that can safely fall back to a local driver call use
+ * SHIM_FALLBACK_IF_DEAD immediately after ipc_call().
  *
  * _v2 versioned aliases are defined alongside each function because CUDA
  * applications link against the versioned symbols.
@@ -32,6 +51,15 @@
 #define HANDLE_TO_PTR(h)   ((void *)(uintptr_t)(h))
 #define PTR_TO_HANDLE(p)   ((uint64_t)(uintptr_t)(p))
 
+// ── Routing helpers ───────────────────────────────────────────────────────────
+
+// True if a CUdevice value represents a local (real driver) device.
+// CUdevice is effectively an int ordinal in all NVIDIA CUDA implementations.
+#define DEV_IS_LOCAL(dev)  ((int)(dev) < g_local_device_count)
+
+// Adjusted ordinal to send to the agent: strips the local device offset.
+#define DEV_REMOTE_ORD(dev) ((int)(dev) - g_local_device_count)
+
 // ── cuInit ────────────────────────────────────────────────────────────────────
 
 __attribute__((visibility("default")))
@@ -43,38 +71,47 @@ CUresult cuInit(unsigned int Flags) {
     }
 
     Req_cuInit req = { .flags = (uint32_t)Flags };
-    return ipc_call(FN_cuInit, &req, sizeof(req), NULL, 0, NULL);
+    CUresult r = ipc_call(FN_cuInit, &req, sizeof(req), NULL, 0, NULL);
+    // If IPC died mid-call (timeout), retry via local driver.
+    SHIM_FALLBACK_IF_DEAD(g_real.cuInit, Flags);
+    return r;
+}
+
+// ── cuDeviceGetCount ──────────────────────────────────────────────────────────
+//
+// Returns local_count + remote_count without an IPC round-trip.
+// remote_count is 1 if IPC is live, 0 otherwise.
+
+__attribute__((visibility("default")))
+CUresult cuDeviceGetCount(int *count) {
+    if (count != NULL) {
+        *count = g_local_device_count + (g_ipc_connected ? 1 : 0);
+    }
+    return CUDA_SUCCESS;
 }
 
 // ── cuDeviceGet ───────────────────────────────────────────────────────────────
 
 __attribute__((visibility("default")))
 CUresult cuDeviceGet(CUdevice *device, int ordinal) {
-    SHIM_REQUIRE_IPC(g_real.cuDeviceGet, device, ordinal);
+    if (ordinal < g_local_device_count) {
+        // Local device: delegate directly to the real driver.
+        if (g_real.cuDeviceGet != NULL) return g_real.cuDeviceGet(device, ordinal);
+        return CUDA_ERROR_NOT_INITIALIZED;
+    }
 
-    Req_cuDeviceGet  req  = { .ordinal = ordinal };
+    // Remote device.
+    if (!g_ipc_connected) return CUDA_ERROR_INVALID_VALUE;
+
+    Req_cuDeviceGet  req  = { .ordinal = ordinal - g_local_device_count };
     Resp_cuDeviceGet resp = { 0 };
 
     CUresult r = ipc_call(FN_cuDeviceGet, &req, sizeof(req),
                           &resp, sizeof(resp), NULL);
     if (r == CUDA_SUCCESS && device != NULL) {
-        *device = (CUdevice)resp.device;
-    }
-    return r;
-}
-
-// ── cuDeviceGetCount ──────────────────────────────────────────────────────────
-
-__attribute__((visibility("default")))
-CUresult cuDeviceGetCount(int *count) {
-    SHIM_REQUIRE_IPC(g_real.cuDeviceGetCount, count);
-
-    // Request payload: empty.
-    int32_t resp_count = 0;
-    CUresult r = ipc_call(FN_cuDeviceGetCount, NULL, 0,
-                          &resp_count, sizeof(resp_count), NULL);
-    if (r == CUDA_SUCCESS && count != NULL) {
-        *count = (int)resp_count;
+        // Return the virtual ordinal (not the agent's internal device number)
+        // so subsequent routing comparisons against g_local_device_count work.
+        *device = (CUdevice)ordinal;
     }
     return r;
 }
@@ -83,18 +120,23 @@ CUresult cuDeviceGetCount(int *count) {
 
 __attribute__((visibility("default")))
 CUresult cuDeviceGetName(char *name, int len, CUdevice dev) {
-    SHIM_REQUIRE_IPC(g_real.cuDeviceGetName, name, len, dev);
-
     if (name == NULL || len <= 0) {
         return CUDA_ERROR_INVALID_VALUE;
     }
 
+    if (DEV_IS_LOCAL(dev)) {
+        if (g_real.cuDeviceGetName != NULL)
+            return g_real.cuDeviceGetName(name, len, dev);
+        return CUDA_ERROR_NOT_INITIALIZED;
+    }
+
+    if (!g_ipc_connected) return CUDA_ERROR_INVALID_VALUE;
+
     Req_cuDeviceGetName req = {
         .len    = (uint32_t)len,
-        .device = (int32_t)dev,
+        .device = (int32_t)DEV_REMOTE_ORD(dev),
     };
 
-    // Response payload: up to `len` bytes of device name.
     CUresult r = ipc_call(FN_cuDeviceGetName, &req, sizeof(req),
                           name, (uint32_t)len, NULL);
     if (r == CUDA_SUCCESS) {
@@ -108,11 +150,17 @@ CUresult cuDeviceGetName(char *name, int len, CUdevice dev) {
 
 __attribute__((visibility("default")))
 CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) {
-    SHIM_REQUIRE_IPC(g_real.cuDeviceGetAttribute, pi, attrib, dev);
+    if (DEV_IS_LOCAL(dev)) {
+        if (g_real.cuDeviceGetAttribute != NULL)
+            return g_real.cuDeviceGetAttribute(pi, attrib, dev);
+        return CUDA_ERROR_NOT_INITIALIZED;
+    }
+
+    if (!g_ipc_connected) return CUDA_ERROR_INVALID_VALUE;
 
     Req_cuDeviceGetAttribute  req  = {
         .attrib = (int32_t)attrib,
-        .device = (int32_t)dev,
+        .device = (int32_t)DEV_REMOTE_ORD(dev),
     };
     Resp_cuDeviceGetAttribute resp = { 0 };
 
@@ -128,9 +176,15 @@ CUresult cuDeviceGetAttribute(int *pi, CUdevice_attribute attrib, CUdevice dev) 
 
 __attribute__((visibility("default")))
 CUresult cuDeviceTotalMem(size_t *bytes, CUdevice dev) {
-    SHIM_REQUIRE_IPC(g_real.cuDeviceTotalMem, bytes, dev);
+    if (DEV_IS_LOCAL(dev)) {
+        if (g_real.cuDeviceTotalMem != NULL)
+            return g_real.cuDeviceTotalMem(bytes, dev);
+        return CUDA_ERROR_NOT_INITIALIZED;
+    }
 
-    Req_cuDeviceTotalMem  req  = { .device = (int32_t)dev };
+    if (!g_ipc_connected) return CUDA_ERROR_INVALID_VALUE;
+
+    Req_cuDeviceTotalMem  req  = { .device = (int32_t)DEV_REMOTE_ORD(dev) };
     Resp_cuDeviceTotalMem resp = { 0 };
 
     CUresult r = ipc_call(FN_cuDeviceTotalMem, &req, sizeof(req),
@@ -148,14 +202,21 @@ CUresult cuDeviceTotalMem_v2(size_t *bytes, CUdevice dev) {
 }
 
 // ── cuCtxCreate ───────────────────────────────────────────────────────────────
+//
+// Routes by device: local devices use the real driver, remote devices go via IPC.
 
 __attribute__((visibility("default")))
 CUresult cuCtxCreate(CUcontext *pctx, unsigned int flags, CUdevice dev) {
-    SHIM_REQUIRE_IPC(g_real.cuCtxCreate, pctx, flags, dev);
+    if (DEV_IS_LOCAL(dev)) {
+        if (g_real.cuCtxCreate != NULL) return g_real.cuCtxCreate(pctx, flags, dev);
+        return CUDA_ERROR_NOT_INITIALIZED;
+    }
+
+    if (!g_ipc_connected) return CUDA_ERROR_INVALID_VALUE;
 
     Req_cuCtxCreate  req  = {
         .flags  = (uint32_t)flags,
-        .device = (int32_t)dev,
+        .device = (int32_t)DEV_REMOTE_ORD(dev),
     };
     Resp_cuCtxCreate resp = { 0 };
 
@@ -174,6 +235,10 @@ CUresult cuCtxCreate_v2(CUcontext *pctx, unsigned int flags, CUdevice dev) {
 }
 
 // ── cuCtxDestroy ──────────────────────────────────────────────────────────────
+//
+// No device argument — we don't know which GPU the context belongs to.
+// Route via IPC if connected; fall back to local otherwise.  No post-timeout
+// fallback: destroying a remote context handle on the local driver would crash.
 
 __attribute__((visibility("default")))
 CUresult cuCtxDestroy(CUcontext ctx) {
@@ -207,6 +272,9 @@ CUresult cuCtxGetCurrent(CUcontext *pctx) {
     Resp_cuCtxGetCurrent resp = { 0 };
     CUresult r = ipc_call(FN_cuCtxGetCurrent, NULL, 0,
                           &resp, sizeof(resp), NULL);
+    // Post-timeout fallback: reading the current context from the local driver
+    // is safe (worst case returns NULL context).
+    SHIM_FALLBACK_IF_DEAD(g_real.cuCtxGetCurrent, pctx);
     if (r == CUDA_SUCCESS && pctx != NULL) {
         *pctx = (CUcontext)HANDLE_TO_PTR(resp.ctx_handle);
     }

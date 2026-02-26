@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -33,15 +34,22 @@
 // File descriptor for the Unix socket connection to the sidecar.
 static int s_fd = -1;
 
+// Configured IPC call timeout in milliseconds.  Applied as SO_RCVTIMEO and
+// SO_SNDTIMEO in ipc_connect().  Default 2000 ms; override with
+// IDLEGPU_IPC_TIMEOUT_MS environment variable.
+static long s_ipc_timeout_ms = 2000;
+
 // ── Low-level I/O helpers ─────────────────────────────────────────────────────
 
-// Write exactly len bytes to fd, retrying on EINTR.  Returns 0 or -1.
+// Write exactly len bytes to fd, retrying on EINTR.
+// Returns 0 on success, -1 on error, -2 on timeout (EAGAIN/EWOULDBLOCK).
 static int ipc_send_all(int fd, const void *buf, size_t len) {
     const uint8_t *p = (const uint8_t *)buf;
     while (len > 0) {
         ssize_t n = send(fd, p, len, MSG_NOSIGNAL);
         if (n < 0) {
             if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return -2;
             return -1;
         }
         p   += (size_t)n;
@@ -50,13 +58,16 @@ static int ipc_send_all(int fd, const void *buf, size_t len) {
     return 0;
 }
 
-// Read exactly len bytes from fd, retrying on EINTR.  Returns 0 or -1.
+// Read exactly len bytes from fd, retrying on EINTR.
+// Returns 0 on success, -1 on error/EOF, -2 on timeout (EAGAIN/EWOULDBLOCK).
+// MSG_WAITALL is intentionally omitted so that SO_RCVTIMEO takes effect.
 static int ipc_recv_all(int fd, void *buf, size_t len) {
     uint8_t *p = (uint8_t *)buf;
     while (len > 0) {
-        ssize_t n = recv(fd, p, len, MSG_WAITALL);
+        ssize_t n = recv(fd, p, len, 0);
         if (n < 0) {
             if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return -2;
             return -1;
         }
         if (n == 0) {
@@ -75,6 +86,13 @@ int ipc_connect(void) {
     const char *path = getenv("IDLEGPU_SOCKET");
     if (!path || path[0] == '\0') {
         path = IDLEGPU_SOCKET_DEFAULT;
+    }
+
+    // Read timeout from environment (default 2000 ms).
+    const char *timeout_env = getenv("IDLEGPU_IPC_TIMEOUT_MS");
+    if (timeout_env && timeout_env[0] != '\0') {
+        long v = atol(timeout_env);
+        if (v > 0) s_ipc_timeout_ms = v;
     }
 
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -100,8 +118,17 @@ int ipc_connect(void) {
         return -1;
     }
 
+    // Apply per-call send/receive timeout so ipc_call() never blocks indefinitely.
+    struct timeval tv = {
+        .tv_sec  = s_ipc_timeout_ms / 1000L,
+        .tv_usec = (s_ipc_timeout_ms % 1000L) * 1000L,
+    };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
     s_fd = fd;
-    SHIM_DEBUG("ipc_connect: connected to %s (fd=%d)", path, fd);
+    SHIM_DEBUG("ipc_connect: connected to %s (fd=%d, timeout=%ld ms)",
+               path, fd, s_ipc_timeout_ms);
     return 0;
 }
 
@@ -147,27 +174,40 @@ CUresult ipc_call(
         .payload_len = req_payload_len,
     };
 
-    if (ipc_send_all(s_fd, &req_hdr, sizeof(req_hdr)) < 0) {
+    int rc;
+    rc = ipc_send_all(s_fd, &req_hdr, sizeof(req_hdr));
+    if (rc < 0) {
+        if (rc == -2)
+            SHIM_WARN("ipc_call func_id=%u: send timed out after %ld ms",
+                      func_id, s_ipc_timeout_ms);
         ipc_mark_dead();
         pthread_mutex_unlock(&g_ipc_mutex);
-        return CUDA_ERROR_UNKNOWN;
+        return CUDA_ERROR_NOT_INITIALIZED;
     }
 
     if (req_payload_len > 0 && req_payload != NULL) {
-        if (ipc_send_all(s_fd, req_payload, req_payload_len) < 0) {
+        rc = ipc_send_all(s_fd, req_payload, req_payload_len);
+        if (rc < 0) {
+            if (rc == -2)
+                SHIM_WARN("ipc_call func_id=%u: send payload timed out after %ld ms",
+                          func_id, s_ipc_timeout_ms);
             ipc_mark_dead();
             pthread_mutex_unlock(&g_ipc_mutex);
-            return CUDA_ERROR_UNKNOWN;
+            return CUDA_ERROR_NOT_INITIALIZED;
         }
     }
 
     // ── Receive response ──────────────────────────────────────────────────────
 
     IpcRespHeader resp_hdr;
-    if (ipc_recv_all(s_fd, &resp_hdr, sizeof(resp_hdr)) < 0) {
+    rc = ipc_recv_all(s_fd, &resp_hdr, sizeof(resp_hdr));
+    if (rc < 0) {
+        if (rc == -2)
+            SHIM_WARN("ipc_call func_id=%u: recv timed out after %ld ms",
+                      func_id, s_ipc_timeout_ms);
         ipc_mark_dead();
         pthread_mutex_unlock(&g_ipc_mutex);
-        return CUDA_ERROR_UNKNOWN;
+        return CUDA_ERROR_NOT_INITIALIZED;
     }
 
     if (resp_hdr.call_id != req_hdr.call_id) {
@@ -188,10 +228,14 @@ CUresult ipc_call(
     // Read response payload (even if the caller doesn't want it, drain it).
     if (resp_hdr.payload_len > 0) {
         if (resp_payload != NULL && resp_hdr.payload_len <= resp_payload_max) {
-            if (ipc_recv_all(s_fd, resp_payload, resp_hdr.payload_len) < 0) {
+            rc = ipc_recv_all(s_fd, resp_payload, resp_hdr.payload_len);
+            if (rc < 0) {
+                if (rc == -2)
+                    SHIM_WARN("ipc_call func_id=%u: recv payload timed out after %ld ms",
+                              func_id, s_ipc_timeout_ms);
                 ipc_mark_dead();
                 pthread_mutex_unlock(&g_ipc_mutex);
-                return CUDA_ERROR_UNKNOWN;
+                return CUDA_ERROR_NOT_INITIALIZED;
             }
         } else {
             // Drain into a temporary buffer so the stream stays in sync.
@@ -199,10 +243,14 @@ CUresult ipc_call(
             uint32_t remaining = resp_hdr.payload_len;
             while (remaining > 0) {
                 uint32_t chunk = remaining < sizeof(drain) ? remaining : sizeof(drain);
-                if (ipc_recv_all(s_fd, drain, chunk) < 0) {
+                rc = ipc_recv_all(s_fd, drain, chunk);
+                if (rc < 0) {
+                    if (rc == -2)
+                        SHIM_WARN("ipc_call func_id=%u: drain timed out after %ld ms",
+                                  func_id, s_ipc_timeout_ms);
                     ipc_mark_dead();
                     pthread_mutex_unlock(&g_ipc_mutex);
-                    return CUDA_ERROR_UNKNOWN;
+                    return CUDA_ERROR_NOT_INITIALIZED;
                 }
                 remaining -= chunk;
             }

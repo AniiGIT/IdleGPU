@@ -31,9 +31,10 @@
 
 // ── Global state ─────────────────────────────────────────────────────────────
 
-volatile int      g_ipc_connected = 0;
-uint32_t          g_call_id       = 0;
-pthread_mutex_t   g_ipc_mutex     = PTHREAD_MUTEX_INITIALIZER;
+volatile int      g_ipc_connected     = 0;
+uint32_t          g_call_id           = 0;
+pthread_mutex_t   g_ipc_mutex         = PTHREAD_MUTEX_INITIALIZER;
+int               g_local_device_count = 0;
 
 // ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -59,11 +60,24 @@ static void shim_init(void) {
     dlsym_fn_t bootstrap = (dlsym_fn_t)dlvsym(RTLD_NEXT, "dlsym", "GLIBC_2.2.5");
     real_cuda_init(bootstrap);
 
+    // Probe the local device count so cuda_init.c can route by device index.
+    // Initialise the real driver first; ignore errors (no local GPU = count 0).
+    if (g_real.cuInit != NULL && g_real.cuDeviceGetCount != NULL) {
+        g_real.cuInit(0);
+        int local_count = 0;
+        if (g_real.cuDeviceGetCount(&local_count) == 0 && local_count > 0) {
+            g_local_device_count = local_count;
+        }
+        SHIM_DEBUG("shim_init: local device count = %d", g_local_device_count);
+    }
+
     if (ipc_connect() == 0) {
         g_ipc_connected = 1;
-        SHIM_INFO("connected to sidecar IPC socket");
+        SHIM_INFO("connected to sidecar IPC socket (local devices: %d, remote: 1)",
+                  g_local_device_count);
     } else {
-        SHIM_WARN("sidecar not available -- CUDA calls will use local GPU fallback");
+        SHIM_WARN("sidecar not available -- CUDA calls will use local GPU only (%d device(s))",
+                  g_local_device_count);
     }
 }
 
