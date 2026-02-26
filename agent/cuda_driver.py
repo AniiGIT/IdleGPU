@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
+import struct
 import sys
 from typing import Any
 
@@ -317,3 +318,62 @@ def cuEventRecord(event_handle: int, stream_handle: int) -> int:
 def cuEventSynchronize(event_handle: int) -> int:
     lib = _ensure_loaded()
     return int(lib.cuEventSynchronize(ctypes.c_void_p(event_handle)))
+
+
+def cuGetExportTable(uuid_bytes: bytes) -> tuple[int, bytes]:
+    """Call the real cuGetExportTable and serialise the table as raw bytes.
+
+    Returns (CUresult, table_bytes) where table_bytes contains the raw
+    64-bit function pointer values from the driver's export table, packed
+    as little-endian uint64.  Entries are read until a NULL pointer is
+    found or EXPORT_TABLE_MAX_ENTRIES (256) entries have been consumed.
+
+    The pointer values are agent-side virtual addresses — they are NOT
+    callable in the sidecar process.  The sidecar reconstructs a heap
+    copy so that the CUDA runtime sees a non-NULL table and passes its
+    capability presence checks.
+    """
+    _EXPORT_TABLE_MAX_ENTRIES = 256
+
+    lib = _ensure_loaded()
+
+    # cuGetExportTable signature:
+    #   CUresult cuGetExportTable(const void **ppExportTable,
+    #                             const CUuuid *pExportTableId)
+    table_ptr = ctypes.c_void_p(0)
+    # Pack the 16-byte UUID into a ctypes byte array.
+    if len(uuid_bytes) < 16:
+        uuid_bytes = uuid_bytes.ljust(16, b"\x00")
+    uuid_buf = (ctypes.c_uint8 * 16)(*uuid_bytes[:16])
+
+    r = int(lib.cuGetExportTable(ctypes.byref(table_ptr), ctypes.byref(uuid_buf)))
+    if r != CUDA_SUCCESS:
+        return r, b""
+
+    ptr_val: int | None = table_ptr.value
+    if ptr_val is None or ptr_val == 0:
+        # Driver returned success but NULL table — return empty bytes; the
+        # shim will substitute a non-NULL sentinel.
+        return CUDA_SUCCESS, b""
+
+    # Read the table as an array of uint64 (void*) values.
+    ptr_array_type = ctypes.c_uint64 * _EXPORT_TABLE_MAX_ENTRIES
+    try:
+        ptr_array = ptr_array_type.from_address(ptr_val)
+        entries: list[int] = []
+        for i in range(_EXPORT_TABLE_MAX_ENTRIES):
+            val = int(ptr_array[i])
+            if val == 0:
+                break
+            entries.append(val)
+    except Exception as exc:
+        # from_address can raise if the pointer is somehow invalid.
+        import logging
+        logging.getLogger(__name__).warning(
+            "cuda_driver: cuGetExportTable: failed to read table at 0x%x: %s",
+            ptr_val, exc,
+        )
+        return CUDA_SUCCESS, b""
+
+    table_bytes = struct.pack(f"<{len(entries)}Q", *entries) if entries else b""
+    return CUDA_SUCCESS, table_bytes

@@ -80,6 +80,7 @@ FN_NvEncUnlockBitstream         = 47
 FN_NvEncDestroyInputBuffer      = 48
 FN_NvEncDestroyBitstreamBuffer  = 49
 FN_NvEncDestroyEncoder          = 50
+FN_cuGetExportTable             = 51  # runtime internals
 
 # ── Simple codec table ────────────────────────────────────────────────────────
 #
@@ -245,6 +246,11 @@ def decode_req(func_id: int, payload: bytes) -> dict:  # type: ignore[type-arg]
     if FN_NvEncOpenEncodeSession <= func_id <= FN_NvEncDestroyEncoder:
         return {"func": f"nvenc_{func_id}", "raw": payload}
 
+    if func_id == FN_cuGetExportTable:
+        # Request payload: 16-byte CUuuid identifying the capability table.
+        uuid_hex = payload[:16].hex() if len(payload) >= 16 else "00" * 16
+        return {"func": "cuGetExportTable", "export_table_id": uuid_hex}
+
     raise ValueError(f"unknown func_id {func_id}")
 
 
@@ -304,5 +310,12 @@ def encode_resp(func_id: int, cuda_result: int, resp: dict, req: dict) -> bytes:
     if FN_NvEncOpenEncodeSession <= func_id <= FN_NvEncDestroyEncoder:
         raw: bytes = resp.get("raw", b"")
         return raw
+
+    if func_id == FN_cuGetExportTable:
+        # Response payload: uint32_t entry_count followed by entry_count * 8
+        # bytes of raw function pointer values (little-endian uint64).
+        table_bytes: bytes = resp.get("export_table", b"")
+        entry_count: int = len(table_bytes) // 8  # whole entries only
+        return struct.pack("<I", entry_count) + table_bytes[: entry_count * 8]
 
     raise ValueError(f"unknown func_id {func_id} in encode_resp")

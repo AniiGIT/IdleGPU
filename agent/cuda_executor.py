@@ -236,6 +236,16 @@ def _cuEventSynchronize(req: dict) -> dict:  # type: ignore[type-arg]
     return {"result": r}
 
 
+def _cuGetExportTable(req: dict) -> dict:  # type: ignore[type-arg]
+    uuid_hex: str = req.get("export_table_id", "00" * 16)
+    try:
+        uuid_bytes = bytes.fromhex(uuid_hex)
+    except ValueError:
+        return {"result": CUDA_ERROR_NOT_SUPPORTED}
+    r, table_bytes = drv.cuGetExportTable(uuid_bytes)
+    return {"result": r, "export_table": table_bytes}
+
+
 # ── Dispatch table ────────────────────────────────────────────────────────────
 
 _HANDLERS = {
@@ -271,4 +281,5 @@ _HANDLERS = {
     "cuEventDestroy":       _cuEventDestroy,
     "cuEventRecord":        _cuEventRecord,
     "cuEventSynchronize":   _cuEventSynchronize,
+    "cuGetExportTable":     _cuGetExportTable,
 }

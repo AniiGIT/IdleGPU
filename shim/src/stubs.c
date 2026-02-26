@@ -22,6 +22,9 @@
  * implementations.
  */
 
+#include <stdlib.h>
+#include <string.h>
+
 #include "idlegpu_shim.h"
 
 // ── Context management (non-Tier-1) ──────────────────────────────────────────
@@ -728,15 +731,84 @@ CUresult cuGetErrorString(CUresult error, const char **pStr) {
 
 // ── Runtime internals ─────────────────────────────────────────────────────────
 
-// cuGetExportTable is an internal NVIDIA function that the CUDA runtime and
-// tools (ffmpeg, PyTorch, etc.) call via dlsym to discover driver capability
-// tables identified by UUID.  Returning NOT_SUPPORTED tells callers that the
-// queried capability is unavailable, which is the correct behaviour while the
-// call is forwarded over IPC rather than executed locally.
+// cuGetExportTable — full IPC forwarding implementation.
+//
+// The CUDA runtime and applications such as ffmpeg call this function at
+// startup to discover internal driver capability tables.  Returning
+// CUDA_ERROR_NOT_SUPPORTED causes the runtime to abort GPU detection, so
+// we must forward the call to the agent and return the real table bytes.
+//
+// The agent serialises the export table as raw 64-bit function pointer
+// values from its own address space.  The shim malloc's a persistent
+// buffer, writes the received pointer values into it, and sets
+// *ppExportTable to that buffer.  The pointers are agent-side virtual
+// addresses and are NOT callable in the sidecar process — they exist
+// solely to satisfy non-NULL presence checks in the CUDA runtime.
 __attribute__((visibility("default")))
 CUresult cuGetExportTable(const void **ppExportTable, const CUuuid *pExportTableId) {
-    (void)ppExportTable; (void)pExportTableId;
-    SHIM_UNIMPLEMENTED("cuGetExportTable");
+    if (ppExportTable == NULL || pExportTableId == NULL) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+
+    if (!g_ipc_connected) {
+        // No local CUDA driver fallback for export tables — the sidecar
+        // container has no direct GPU access.
+        return CUDA_ERROR_NOT_SUPPORTED;
+    }
+
+    // Build request: pack the 16-byte UUID.
+    Req_cuGetExportTable req;
+    memcpy(req.uuid, pExportTableId->bytes, 16);
+
+    // Response buffer: fixed header + up to EXPORT_TABLE_MAX_ENTRIES pointers.
+    uint32_t resp_max = (uint32_t)(sizeof(Resp_cuGetExportTable)
+                                   + EXPORT_TABLE_MAX_ENTRIES * sizeof(uint64_t));
+    uint8_t resp_buf[sizeof(Resp_cuGetExportTable)
+                     + EXPORT_TABLE_MAX_ENTRIES * sizeof(uint64_t)];
+
+    uint32_t resp_len = 0;
+    CUresult r = ipc_call(FN_cuGetExportTable, &req, sizeof(req),
+                          resp_buf, resp_max, &resp_len);
+    if (r != CUDA_SUCCESS) {
+        return r;
+    }
+
+    if (resp_len < sizeof(Resp_cuGetExportTable)) {
+        SHIM_WARN("cuGetExportTable: truncated response (%u bytes)", resp_len);
+        return CUDA_ERROR_UNKNOWN;
+    }
+
+    Resp_cuGetExportTable hdr;
+    memcpy(&hdr, resp_buf, sizeof(hdr));
+    uint32_t entry_count = hdr.entry_count;
+
+    if (entry_count == 0) {
+        // Agent returned an empty table: driver supports the UUID but has
+        // no entries.  Return a non-NULL sentinel so the runtime sees success.
+        *ppExportTable = (const void *)1;
+        return CUDA_SUCCESS;
+    }
+
+    uint32_t table_bytes = entry_count * (uint32_t)sizeof(uint64_t);
+    if (resp_len < sizeof(Resp_cuGetExportTable) + table_bytes) {
+        SHIM_WARN("cuGetExportTable: response too short for %u entries", entry_count);
+        return CUDA_ERROR_UNKNOWN;
+    }
+
+    // Allocate a persistent buffer for the table.  Intentionally never freed
+    // — export tables are expected to live for the duration of the process.
+    void *table = malloc(table_bytes);
+    if (table == NULL) {
+        return CUDA_ERROR_OUT_OF_MEMORY;
+    }
+
+    memcpy(table, resp_buf + sizeof(Resp_cuGetExportTable), table_bytes);
+    *ppExportTable = table;
+
+    SHIM_DEBUG("cuGetExportTable: forwarded %u entries for UUID %02x%02x…",
+               entry_count,
+               pExportTableId->bytes[0], pExportTableId->bytes[1]);
+    return CUDA_SUCCESS;
 }
 
 // ── Profiler ──────────────────────────────────────────────────────────────────

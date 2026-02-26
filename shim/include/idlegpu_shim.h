@@ -291,6 +291,24 @@ typedef struct __attribute__((packed)) {
 // cuEventSynchronize(event)
 typedef struct __attribute__((packed)) { uint64_t event_handle; } Req_cuEventSynchronize;
 
+// cuGetExportTable(ppExportTable, pExportTableId)
+//
+// Request payload: 16-byte UUID identifying the capability table.
+// Response payload: Resp_cuGetExportTable header (4 bytes) followed by
+//   entry_count * 8 bytes — the raw 64-bit function pointer values from
+//   the agent's libcuda.so.1, serialised as little-endian uint64.
+//   The shim malloc's a persistent buffer and writes entry_count pointers
+//   into it, then assigns *ppExportTable to that buffer.
+//
+// Note: the pointer values originate from the agent's address space.
+//   They are valid as remote GPU-side addresses but NOT callable locally.
+//   Use only for capability table presence checks, not for calling entries.
+typedef struct __attribute__((packed)) { uint8_t uuid[16]; } Req_cuGetExportTable;
+typedef struct __attribute__((packed)) { uint32_t entry_count; } Resp_cuGetExportTable;
+
+// Maximum number of entries we read from an export table.
+#define EXPORT_TABLE_MAX_ENTRIES 256u
+
 // ── IPC transport API (implemented in ipc.c) ──────────────────────────────────
 
 // Connect to the sidecar Unix socket. Returns 0 on success, -1 on error.
