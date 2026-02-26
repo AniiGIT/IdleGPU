@@ -104,6 +104,13 @@
 #define FN_NvEncDestroyBitstreamBuffer 49u
 #define FN_NvEncDestroyEncoder         50u
 
+// Runtime internals (51–)
+// cuGetExportTable is an internal CUDA driver function used by the CUDA
+// runtime and ffmpeg to discover driver capability tables at runtime.
+// Reserved here even though the current implementation is a stub so that
+// future IPC forwarding can use a stable function ID.
+#define FN_cuGetExportTable            51u
+
 // ── IPC frame headers ─────────────────────────────────────────────────────────
 
 typedef struct __attribute__((packed)) {

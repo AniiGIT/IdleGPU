@@ -726,6 +726,19 @@ CUresult cuGetErrorString(CUresult error, const char **pStr) {
     SHIM_UNIMPLEMENTED("cuGetErrorString");
 }
 
+// ── Runtime internals ─────────────────────────────────────────────────────────
+
+// cuGetExportTable is an internal NVIDIA function that the CUDA runtime and
+// tools (ffmpeg, PyTorch, etc.) call via dlsym to discover driver capability
+// tables identified by UUID.  Returning NOT_SUPPORTED tells callers that the
+// queried capability is unavailable, which is the correct behaviour while the
+// call is forwarded over IPC rather than executed locally.
+__attribute__((visibility("default")))
+CUresult cuGetExportTable(const void **ppExportTable, const CUuuid *pExportTableId) {
+    (void)ppExportTable; (void)pExportTableId;
+    SHIM_UNIMPLEMENTED("cuGetExportTable");
+}
+
 // ── Profiler ──────────────────────────────────────────────────────────────────
 
 __attribute__((visibility("default")))

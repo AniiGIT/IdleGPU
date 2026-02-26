@@ -99,6 +99,10 @@ CUresult cuEventDestroy(CUevent);
 CUresult cuEventDestroy_v2(CUevent);
 CUresult cuEventRecord(CUevent, CUstream);
 CUresult cuEventSynchronize(CUevent);
+// Error reporting / runtime internals (stubs.c)
+CUresult cuGetErrorName(CUresult, const char **);
+CUresult cuGetErrorString(CUresult, const char **);
+CUresult cuGetExportTable(const void **, const CUuuid *);
 
 typedef struct { const char *name; void *fn; } ShimSym;
 
@@ -149,6 +153,10 @@ static const ShimSym s_shim_syms[] = {
     { "cuEventDestroy_v2",        (void *)cuEventDestroy_v2 },
     { "cuEventRecord",            (void *)cuEventRecord },
     { "cuEventSynchronize",       (void *)cuEventSynchronize },
+    // Error reporting / runtime internals
+    { "cuGetErrorName",           (void *)cuGetErrorName },
+    { "cuGetErrorString",         (void *)cuGetErrorString },
+    { "cuGetExportTable",         (void *)cuGetExportTable },
     { NULL, NULL },
 };
 

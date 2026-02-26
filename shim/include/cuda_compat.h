@@ -98,6 +98,12 @@ typedef enum CUdevice_attribute_enum {
     CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR = 76,
 } CUdevice_attribute;
 
+// ── CUuuid ────────────────────────────────────────────────────────────────────
+//
+// 16-byte UUID used by cuGetExportTable to identify capability tables.
+
+typedef struct { unsigned char bytes[16]; } CUuuid;
+
 // ── cuLaunchKernel extra parameter keys ───────────────────────────────────────
 
 #define CU_LAUNCH_PARAM_END             ((void *)0x00)
