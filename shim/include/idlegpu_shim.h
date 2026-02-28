@@ -164,6 +164,11 @@
 // Occupancy (78) — requires function handle (from cuModuleGetFunction).
 #define FN_cuOccupancyMaxActiveBlocksPerMultiprocessor 78u
 
+// Generic memcpy (81–82) — direction inferred from pointer types.
+// Forwarded over IPC as device-to-device (both pointers are remote GPU addresses).
+#define FN_cuMemcpy       81u
+#define FN_cuMemcpyAsync  82u
+
 // ── IPC frame headers ─────────────────────────────────────────────────────────
 
 typedef struct __attribute__((packed)) {
@@ -522,6 +527,22 @@ typedef struct __attribute__((packed)) {
 } Req_cuOccupancyMaxActiveBlocksPerMultiprocessor;  // 20 bytes
 typedef struct __attribute__((packed)) { int32_t num_blocks; } Resp_cuOccupancyMaxActiveBlocksPerMultiprocessor;
 
+// cuMemcpy(dst, src, ByteCount) — direction inferred by driver from pointer types.
+// Over IPC, both pointers must be remote GPU device pointers (D-to-D semantics).
+typedef struct __attribute__((packed)) {
+    uint64_t dst;
+    uint64_t src;
+    uint64_t byte_count;
+} Req_cuMemcpy;  // 24 bytes
+
+// cuMemcpyAsync(dst, src, ByteCount, hStream) — stream-ordered variant.
+typedef struct __attribute__((packed)) {
+    uint64_t dst;
+    uint64_t src;
+    uint64_t byte_count;
+    uint64_t stream_handle;
+} Req_cuMemcpyAsync;  // 32 bytes
+
 // ── IPC transport API (implemented in ipc.c) ──────────────────────────────────
 
 // Connect to the sidecar Unix socket. Returns 0 on success, -1 on error.
@@ -716,6 +737,47 @@ typedef struct {
                   int *minGridSize, int *blockSize,
                   CUfunction func, void *blockSizeToDynamicSMemSize,
                   size_t dynamicSMemSize, int blockSizeLimit);
+    // Generic memcpy (local-driver-first + IPC as D-to-D)
+    CUresult (*cuMemcpy)(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount);
+    CUresult (*cuMemcpyAsync)(CUdeviceptr dst, CUdeviceptr src,
+                              size_t ByteCount, CUstream hStream);
+    // Peer copies (local-only — context handles cannot cross IPC boundary)
+    CUresult (*cuMemcpyPeer)(CUdeviceptr dstDev, CUcontext dstCtx,
+                             CUdeviceptr srcDev, CUcontext srcCtx, size_t ByteCount);
+    CUresult (*cuMemcpyPeerAsync)(CUdeviceptr dstDev, CUcontext dstCtx,
+                                  CUdeviceptr srcDev, CUcontext srcCtx,
+                                  size_t ByteCount, CUstream hStream);
+    // Address range query (local-only — address space is process-local)
+    CUresult (*cuMemGetAddressRange_v2)(CUdeviceptr *pbase, size_t *psize, CUdeviceptr dptr);
+    // Host memory management (local-only — returns host virtual address pointers)
+    CUresult (*cuMemHostAlloc)(void **pp, size_t bytesize, unsigned int flags);
+    CUresult (*cuMemFreeHost)(void *p);
+    CUresult (*cuMemHostGetDevicePointer_v2)(CUdeviceptr *pdptr, void *p, unsigned int flags);
+    CUresult (*cuMemHostGetFlags)(unsigned int *pFlags, void *p);
+    CUresult (*cuMemHostRegister_v2)(void *p, size_t bytesize, unsigned int flags);
+    CUresult (*cuMemHostUnregister)(void *p);
+    // CUDA IPC memory handles (local-only — handles are process-local opaque values)
+    // CUipcMemHandle is a char[64] struct; use void * to avoid extra header dependency.
+    CUresult (*cuIpcGetMemHandle)(void *pHandle, CUdeviceptr dptr);
+    CUresult (*cuIpcOpenMemHandle_v2)(CUdeviceptr *pdptr, const void *handle,
+                                      unsigned int flags);
+    CUresult (*cuIpcCloseMemHandle)(CUdeviceptr dptr);
+    // Error reporting (local-only — string pointers into driver's static tables)
+    CUresult (*cuGetErrorName)(CUresult error, const char **pStr);
+    CUresult (*cuGetErrorString)(CUresult error, const char **pStr);
+    // Virtual memory management API (local-only — VA range is process-local)
+    // CUmemGenericAllocationHandle is uint64 on all platforms; use uint64_t to
+    // avoid depending on CUDA 10.2+ headers that may not be in cuda_compat.h.
+    CUresult (*cuMemAddressReserve)(CUdeviceptr *ptr, size_t size, size_t alignment,
+                                    CUdeviceptr addr, unsigned long long flags);
+    CUresult (*cuMemRelease)(uint64_t handle);
+    CUresult (*cuMemMap)(CUdeviceptr ptr, size_t size, size_t offset,
+                         uint64_t handle, unsigned long long flags);
+    CUresult (*cuMemUnmap)(CUdeviceptr ptr, size_t size);
+    CUresult (*cuMemSetAccess)(CUdeviceptr ptr, size_t size,
+                               const void *desc, size_t count);
+    CUresult (*cuMemCreate)(uint64_t *handle, size_t size,
+                            const void *prop, unsigned long long flags);
 } RealCuda;
 
 // Global real CUDA function pointer table (defined in real_cuda.c).

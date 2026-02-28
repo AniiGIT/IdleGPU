@@ -509,8 +509,9 @@ CUresult cuMemAllocHost_v2(void **pp, size_t bytesize) {
 
 __attribute__((visibility("default")))
 CUresult cuMemFreeHost(void *p) {
-    (void)p;
-    SHIM_UNIMPLEMENTED("cuMemFreeHost");
+    if (g_real.cuMemFreeHost != NULL)
+        return g_real.cuMemFreeHost(p);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 // cuMemAllocManaged — allocate unified managed memory.
@@ -560,76 +561,100 @@ CUresult cuMemAdvise(CUdeviceptr devPtr, size_t count, int advice, int device) {
     SHIM_UNIMPLEMENTED("cuMemAdvise");
 }
 
+// Host memory management — all local-driver-only.
+// These functions allocate/register/query pinned host memory.  The returned
+// host virtual addresses are meaningless across an IPC boundary.
 __attribute__((visibility("default")))
 CUresult cuMemHostAlloc(void **pp, size_t bytesize, unsigned int Flags) {
-    (void)pp; (void)bytesize; (void)Flags;
-    SHIM_UNIMPLEMENTED("cuMemHostAlloc");
-}
-
-__attribute__((visibility("default")))
-CUresult cuMemHostRegister(void *p, size_t bytesize, unsigned int Flags) {
-    (void)p; (void)bytesize; (void)Flags;
-    SHIM_UNIMPLEMENTED("cuMemHostRegister");
+    if (g_real.cuMemHostAlloc != NULL)
+        return g_real.cuMemHostAlloc(pp, bytesize, Flags);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuMemHostRegister_v2(void *p, size_t bytesize, unsigned int Flags) {
-    (void)p; (void)bytesize; (void)Flags;
-    SHIM_UNIMPLEMENTED("cuMemHostRegister_v2");
+    if (g_real.cuMemHostRegister_v2 != NULL)
+        return g_real.cuMemHostRegister_v2(p, bytesize, Flags);
+    return CUDA_ERROR_NOT_SUPPORTED;
+}
+
+__attribute__((visibility("default")))
+CUresult cuMemHostRegister(void *p, size_t bytesize, unsigned int Flags) {
+    // cuMemHostRegister is the deprecated alias for cuMemHostRegister_v2.
+    return cuMemHostRegister_v2(p, bytesize, Flags);
 }
 
 __attribute__((visibility("default")))
 CUresult cuMemHostUnregister(void *p) {
-    (void)p;
-    SHIM_UNIMPLEMENTED("cuMemHostUnregister");
-}
-
-__attribute__((visibility("default")))
-CUresult cuMemHostGetDevicePointer(CUdeviceptr *pdptr, void *p, unsigned int Flags) {
-    (void)pdptr; (void)p; (void)Flags;
-    SHIM_UNIMPLEMENTED("cuMemHostGetDevicePointer");
+    if (g_real.cuMemHostUnregister != NULL)
+        return g_real.cuMemHostUnregister(p);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuMemHostGetDevicePointer_v2(CUdeviceptr *pdptr, void *p, unsigned int Flags) {
-    (void)pdptr; (void)p; (void)Flags;
-    SHIM_UNIMPLEMENTED("cuMemHostGetDevicePointer_v2");
+    if (g_real.cuMemHostGetDevicePointer_v2 != NULL)
+        return g_real.cuMemHostGetDevicePointer_v2(pdptr, p, Flags);
+    return CUDA_ERROR_NOT_SUPPORTED;
+}
+
+__attribute__((visibility("default")))
+CUresult cuMemHostGetDevicePointer(CUdeviceptr *pdptr, void *p, unsigned int Flags) {
+    // cuMemHostGetDevicePointer is the deprecated alias for _v2.
+    return cuMemHostGetDevicePointer_v2(pdptr, p, Flags);
 }
 
 __attribute__((visibility("default")))
 CUresult cuMemHostGetFlags(unsigned int *pFlags, void *p) {
-    (void)pFlags; (void)p;
-    SHIM_UNIMPLEMENTED("cuMemHostGetFlags");
+    if (g_real.cuMemHostGetFlags != NULL)
+        return g_real.cuMemHostGetFlags(pFlags, p);
+    return CUDA_ERROR_NOT_SUPPORTED;
+}
+
+// CUDA IPC memory handles — all local-driver-only.
+// IPC handles encode a process-local allocation reference; they cannot be
+// meaningfully forwarded across the agent IPC boundary.
+__attribute__((visibility("default")))
+CUresult cuIpcGetMemHandle(void *pHandle, CUdeviceptr dptr) {
+    if (g_real.cuIpcGetMemHandle != NULL)
+        return g_real.cuIpcGetMemHandle(pHandle, dptr);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
-CUresult cuIpcGetMemHandle(void *pHandle, CUdeviceptr dptr) {
-    (void)pHandle; (void)dptr;
-    SHIM_UNIMPLEMENTED("cuIpcGetMemHandle");
+CUresult cuIpcOpenMemHandle_v2(CUdeviceptr *pdptr, const void *handle, unsigned int Flags) {
+    if (g_real.cuIpcOpenMemHandle_v2 != NULL)
+        return g_real.cuIpcOpenMemHandle_v2(pdptr, handle, Flags);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuIpcOpenMemHandle(CUdeviceptr *pdptr, void *handle, unsigned int Flags) {
-    (void)pdptr; (void)handle; (void)Flags;
-    SHIM_UNIMPLEMENTED("cuIpcOpenMemHandle");
+    // cuIpcOpenMemHandle is the deprecated alias for cuIpcOpenMemHandle_v2.
+    return cuIpcOpenMemHandle_v2(pdptr, handle, Flags);
 }
 
 __attribute__((visibility("default")))
 CUresult cuIpcCloseMemHandle(CUdeviceptr dptr) {
-    (void)dptr;
-    SHIM_UNIMPLEMENTED("cuIpcCloseMemHandle");
+    if (g_real.cuIpcCloseMemHandle != NULL)
+        return g_real.cuIpcCloseMemHandle(dptr);
+    return CUDA_ERROR_NOT_SUPPORTED;
+}
+
+// cuMemGetAddressRange — query the base address and size of an allocation.
+// The answer is in terms of the local (or remote) process's address space;
+// local driver only.
+__attribute__((visibility("default")))
+CUresult cuMemGetAddressRange_v2(CUdeviceptr *pbase, size_t *psize, CUdeviceptr dptr) {
+    if (g_real.cuMemGetAddressRange_v2 != NULL)
+        return g_real.cuMemGetAddressRange_v2(pbase, psize, dptr);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuMemGetAddressRange(CUdeviceptr *pbase, size_t *psize, CUdeviceptr dptr) {
-    (void)pbase; (void)psize; (void)dptr;
-    SHIM_UNIMPLEMENTED("cuMemGetAddressRange");
-}
-
-__attribute__((visibility("default")))
-CUresult cuMemGetAddressRange_v2(CUdeviceptr *pbase, size_t *psize, CUdeviceptr dptr) {
-    (void)pbase; (void)psize; (void)dptr;
-    SHIM_UNIMPLEMENTED("cuMemGetAddressRange_v2");
+    // cuMemGetAddressRange is the deprecated alias for cuMemGetAddressRange_v2.
+    return cuMemGetAddressRange_v2(pbase, psize, dptr);
 }
 
 // cuMemcpyHtoDAsync_v2 — async host→device copy on a stream.
@@ -724,33 +749,61 @@ CUresult cuMemcpyDtoDAsync(CUdeviceptr dstDevice, CUdeviceptr srcDevice,
     return cuMemcpyDtoDAsync_v2(dstDevice, srcDevice, ByteCount, hStream);
 }
 
+// cuMemcpy — generic copy; direction inferred from pointer types by the driver.
+// Local driver first; IPC fallback treats both pointers as remote device pointers
+// (D-to-D semantics — the only case where both sides are valid on the remote GPU).
 __attribute__((visibility("default")))
 CUresult cuMemcpy(CUdeviceptr dst, CUdeviceptr src, size_t ByteCount) {
-    (void)dst; (void)src; (void)ByteCount;
-    SHIM_UNIMPLEMENTED("cuMemcpy");
+    if (g_real.cuMemcpy != NULL)
+        return g_real.cuMemcpy(dst, src, ByteCount);
+    if (g_ipc_connected) {
+        Req_cuMemcpy req = {
+            .dst        = (uint64_t)dst,
+            .src        = (uint64_t)src,
+            .byte_count = (uint64_t)ByteCount,
+        };
+        return ipc_call(FN_cuMemcpy, &req, (uint32_t)sizeof(req), NULL, 0, NULL);
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
+// cuMemcpyAsync — stream-ordered generic copy; same IPC treatment as cuMemcpy.
 __attribute__((visibility("default")))
 CUresult cuMemcpyAsync(CUdeviceptr dst, CUdeviceptr src,
                        size_t ByteCount, CUstream hStream) {
-    (void)dst; (void)src; (void)ByteCount; (void)hStream;
-    SHIM_UNIMPLEMENTED("cuMemcpyAsync");
+    if (g_real.cuMemcpyAsync != NULL)
+        return g_real.cuMemcpyAsync(dst, src, ByteCount, hStream);
+    if (g_ipc_connected) {
+        Req_cuMemcpyAsync req = {
+            .dst           = (uint64_t)dst,
+            .src           = (uint64_t)src,
+            .byte_count    = (uint64_t)ByteCount,
+            .stream_handle = (uint64_t)(uintptr_t)hStream,
+        };
+        return ipc_call(FN_cuMemcpyAsync, &req, (uint32_t)sizeof(req), NULL, 0, NULL);
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
+// cuMemcpyPeer / cuMemcpyPeerAsync — peer-to-peer copy between contexts.
+// Context handles are process-local and cannot cross the IPC boundary;
+// local driver only.
 __attribute__((visibility("default")))
 CUresult cuMemcpyPeer(CUdeviceptr dstDevice, CUcontext dstContext,
                       CUdeviceptr srcDevice, CUcontext srcContext, size_t ByteCount) {
-    (void)dstDevice; (void)dstContext; (void)srcDevice; (void)srcContext; (void)ByteCount;
-    SHIM_UNIMPLEMENTED("cuMemcpyPeer");
+    if (g_real.cuMemcpyPeer != NULL)
+        return g_real.cuMemcpyPeer(dstDevice, dstContext, srcDevice, srcContext, ByteCount);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuMemcpyPeerAsync(CUdeviceptr dstDevice, CUcontext dstContext,
                            CUdeviceptr srcDevice, CUcontext srcContext,
                            size_t ByteCount, CUstream hStream) {
-    (void)dstDevice; (void)dstContext; (void)srcDevice; (void)srcContext;
-    (void)ByteCount; (void)hStream;
-    SHIM_UNIMPLEMENTED("cuMemcpyPeerAsync");
+    if (g_real.cuMemcpyPeerAsync != NULL)
+        return g_real.cuMemcpyPeerAsync(dstDevice, dstContext, srcDevice, srcContext,
+                                        ByteCount, hStream);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 // cuMemsetD8/D16/D32Async — stream-ordered memset variants.
@@ -1238,16 +1291,22 @@ CUresult cuGraphAddMemsetNode(void **phGraphNode, void *hGraph,
 
 // ── Error reporting ───────────────────────────────────────────────────────────
 
+// cuGetErrorName / cuGetErrorString — translate a CUresult code to a string.
+// The returned pointer points into the driver's static string table; it is
+// only valid while libcuda.so.1 is loaded.  Local driver only — no IPC path
+// because the string table lives in the agent's address space, not ours.
 __attribute__((visibility("default")))
 CUresult cuGetErrorName(CUresult error, const char **pStr) {
-    (void)error; (void)pStr;
-    SHIM_UNIMPLEMENTED("cuGetErrorName");
+    if (g_real.cuGetErrorName != NULL)
+        return g_real.cuGetErrorName(error, pStr);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuGetErrorString(CUresult error, const char **pStr) {
-    (void)error; (void)pStr;
-    SHIM_UNIMPLEMENTED("cuGetErrorString");
+    if (g_real.cuGetErrorString != NULL)
+        return g_real.cuGetErrorString(error, pStr);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 // ── Runtime internals ─────────────────────────────────────────────────────────
@@ -1294,4 +1353,55 @@ CUresult cuProfilerStart(void) {
 __attribute__((visibility("default")))
 CUresult cuProfilerStop(void) {
     SHIM_UNIMPLEMENTED("cuProfilerStop");
+}
+
+// ── Virtual memory management API ─────────────────────────────────────────────
+//
+// All functions in this section are local-driver-only.  The virtual address
+// range managed by these calls is process-local; forwarding over IPC would
+// produce addresses that are meaningless in the sidecar/shim address space.
+
+__attribute__((visibility("default")))
+CUresult cuMemAddressReserve(CUdeviceptr *ptr, size_t size, size_t alignment,
+                              CUdeviceptr addr, unsigned long long flags) {
+    if (g_real.cuMemAddressReserve != NULL)
+        return g_real.cuMemAddressReserve(ptr, size, alignment, addr, flags);
+    return CUDA_ERROR_NOT_SUPPORTED;
+}
+
+__attribute__((visibility("default")))
+CUresult cuMemRelease(uint64_t handle) {
+    if (g_real.cuMemRelease != NULL)
+        return g_real.cuMemRelease(handle);
+    return CUDA_ERROR_NOT_SUPPORTED;
+}
+
+__attribute__((visibility("default")))
+CUresult cuMemMap(CUdeviceptr ptr, size_t size, size_t offset,
+                  uint64_t handle, unsigned long long flags) {
+    if (g_real.cuMemMap != NULL)
+        return g_real.cuMemMap(ptr, size, offset, handle, flags);
+    return CUDA_ERROR_NOT_SUPPORTED;
+}
+
+__attribute__((visibility("default")))
+CUresult cuMemUnmap(CUdeviceptr ptr, size_t size) {
+    if (g_real.cuMemUnmap != NULL)
+        return g_real.cuMemUnmap(ptr, size);
+    return CUDA_ERROR_NOT_SUPPORTED;
+}
+
+__attribute__((visibility("default")))
+CUresult cuMemSetAccess(CUdeviceptr ptr, size_t size, const void *desc, size_t count) {
+    if (g_real.cuMemSetAccess != NULL)
+        return g_real.cuMemSetAccess(ptr, size, desc, count);
+    return CUDA_ERROR_NOT_SUPPORTED;
+}
+
+__attribute__((visibility("default")))
+CUresult cuMemCreate(uint64_t *handle, size_t size, const void *prop,
+                     unsigned long long flags) {
+    if (g_real.cuMemCreate != NULL)
+        return g_real.cuMemCreate(handle, size, prop, flags);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }

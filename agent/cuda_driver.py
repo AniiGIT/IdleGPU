@@ -256,6 +256,23 @@ def cuMemsetD32Async(dst: int, value: int, count: int, stream_handle: int) -> in
     ))
 
 
+def cuMemcpy(dst: int, src: int, byte_count: int) -> int:
+    """Generic memcpy — direction inferred from pointer types by the driver."""
+    lib = _ensure_loaded()
+    return int(lib.cuMemcpy(
+        ctypes.c_uint64(dst), ctypes.c_uint64(src), ctypes.c_size_t(byte_count)
+    ))
+
+
+def cuMemcpyAsync(dst: int, src: int, byte_count: int, stream_handle: int) -> int:
+    """Stream-ordered generic memcpy."""
+    lib = _ensure_loaded()
+    return int(lib.cuMemcpyAsync(
+        ctypes.c_uint64(dst), ctypes.c_uint64(src),
+        ctypes.c_size_t(byte_count), ctypes.c_void_p(stream_handle),
+    ))
+
+
 def cuMemcpyDtoDAsync(dst: int, src: int, byte_count: int, stream_handle: int) -> int:
     lib = _ensure_loaded()
     fn = getattr(lib, "cuMemcpyDtoDAsync_v2", None) or lib.cuMemcpyDtoDAsync

@@ -152,6 +152,36 @@ CUresult cuFuncSetSharedMemConfig(CUfunction, int);
 // Occupancy
 CUresult cuOccupancyMaxActiveBlocksPerMultiprocessor(int *, CUfunction, int, size_t);
 CUresult cuOccupancyMaxPotentialBlockSize(int *, int *, CUfunction, void *, size_t, int);
+// Generic memcpy (local-driver-first + IPC as D-to-D)
+CUresult cuMemcpy(CUdeviceptr, CUdeviceptr, size_t);
+CUresult cuMemcpyAsync(CUdeviceptr, CUdeviceptr, size_t, CUstream);
+// Peer copies (local-only)
+CUresult cuMemcpyPeer(CUdeviceptr, CUcontext, CUdeviceptr, CUcontext, size_t);
+CUresult cuMemcpyPeerAsync(CUdeviceptr, CUcontext, CUdeviceptr, CUcontext, size_t, CUstream);
+// Address range (local-only)
+CUresult cuMemGetAddressRange(CUdeviceptr *, size_t *, CUdeviceptr);
+CUresult cuMemGetAddressRange_v2(CUdeviceptr *, size_t *, CUdeviceptr);
+// Host memory management (local-only)
+CUresult cuMemHostAlloc(void **, size_t, unsigned int);
+CUresult cuMemFreeHost(void *);
+CUresult cuMemHostGetDevicePointer(CUdeviceptr *, void *, unsigned int);
+CUresult cuMemHostGetDevicePointer_v2(CUdeviceptr *, void *, unsigned int);
+CUresult cuMemHostGetFlags(unsigned int *, void *);
+CUresult cuMemHostRegister(void *, size_t, unsigned int);
+CUresult cuMemHostRegister_v2(void *, size_t, unsigned int);
+CUresult cuMemHostUnregister(void *);
+// CUDA IPC memory (local-only)
+CUresult cuIpcGetMemHandle(void *, CUdeviceptr);
+CUresult cuIpcOpenMemHandle(CUdeviceptr *, void *, unsigned int);
+CUresult cuIpcOpenMemHandle_v2(CUdeviceptr *, const void *, unsigned int);
+CUresult cuIpcCloseMemHandle(CUdeviceptr);
+// Virtual memory management (local-only)
+CUresult cuMemAddressReserve(CUdeviceptr *, size_t, size_t, CUdeviceptr, unsigned long long);
+CUresult cuMemRelease(uint64_t);
+CUresult cuMemMap(CUdeviceptr, size_t, size_t, uint64_t, unsigned long long);
+CUresult cuMemUnmap(CUdeviceptr, size_t);
+CUresult cuMemSetAccess(CUdeviceptr, size_t, const void *, size_t);
+CUresult cuMemCreate(uint64_t *, size_t, const void *, unsigned long long);
 
 typedef struct { const char *name; void *fn; } ShimSym;
 
@@ -258,6 +288,36 @@ static const ShimSym s_shim_syms[] = {
                                       (void *)cuOccupancyMaxActiveBlocksPerMultiprocessor },
     { "cuOccupancyMaxPotentialBlockSize",
                                       (void *)cuOccupancyMaxPotentialBlockSize },
+    // Generic memcpy
+    { "cuMemcpy",                     (void *)cuMemcpy },
+    { "cuMemcpyAsync",                (void *)cuMemcpyAsync },
+    // Peer copies
+    { "cuMemcpyPeer",                 (void *)cuMemcpyPeer },
+    { "cuMemcpyPeerAsync",            (void *)cuMemcpyPeerAsync },
+    // Address range
+    { "cuMemGetAddressRange",         (void *)cuMemGetAddressRange },
+    { "cuMemGetAddressRange_v2",      (void *)cuMemGetAddressRange_v2 },
+    // Host memory management
+    { "cuMemHostAlloc",               (void *)cuMemHostAlloc },
+    { "cuMemFreeHost",                (void *)cuMemFreeHost },
+    { "cuMemHostGetDevicePointer",    (void *)cuMemHostGetDevicePointer },
+    { "cuMemHostGetDevicePointer_v2", (void *)cuMemHostGetDevicePointer_v2 },
+    { "cuMemHostGetFlags",            (void *)cuMemHostGetFlags },
+    { "cuMemHostRegister",            (void *)cuMemHostRegister },
+    { "cuMemHostRegister_v2",         (void *)cuMemHostRegister_v2 },
+    { "cuMemHostUnregister",          (void *)cuMemHostUnregister },
+    // CUDA IPC memory
+    { "cuIpcGetMemHandle",            (void *)cuIpcGetMemHandle },
+    { "cuIpcOpenMemHandle",           (void *)cuIpcOpenMemHandle },
+    { "cuIpcOpenMemHandle_v2",        (void *)cuIpcOpenMemHandle_v2 },
+    { "cuIpcCloseMemHandle",          (void *)cuIpcCloseMemHandle },
+    // Virtual memory management
+    { "cuMemAddressReserve",          (void *)cuMemAddressReserve },
+    { "cuMemRelease",                 (void *)cuMemRelease },
+    { "cuMemMap",                     (void *)cuMemMap },
+    { "cuMemUnmap",                   (void *)cuMemUnmap },
+    { "cuMemSetAccess",               (void *)cuMemSetAccess },
+    { "cuMemCreate",                  (void *)cuMemCreate },
     { NULL, NULL },
 };
 
@@ -354,6 +414,28 @@ void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *)) {
     LOAD(cuFuncSetSharedMemConfig);
     LOAD(cuOccupancyMaxActiveBlocksPerMultiprocessor);
     LOAD(cuOccupancyMaxPotentialBlockSize);
+    LOAD(cuMemcpy);
+    LOAD(cuMemcpyAsync);
+    LOAD(cuMemcpyPeer);
+    LOAD(cuMemcpyPeerAsync);
+    LOAD(cuMemGetAddressRange_v2);
+    LOAD(cuMemHostAlloc);
+    LOAD(cuMemFreeHost);
+    LOAD(cuMemHostGetDevicePointer_v2);
+    LOAD(cuMemHostGetFlags);
+    LOAD(cuMemHostRegister_v2);
+    LOAD(cuMemHostUnregister);
+    LOAD(cuIpcGetMemHandle);
+    LOAD(cuIpcOpenMemHandle_v2);
+    LOAD(cuIpcCloseMemHandle);
+    LOAD(cuGetErrorName);
+    LOAD(cuGetErrorString);
+    LOAD(cuMemAddressReserve);
+    LOAD(cuMemRelease);
+    LOAD(cuMemMap);
+    LOAD(cuMemUnmap);
+    LOAD(cuMemSetAccess);
+    LOAD(cuMemCreate);
 #undef LOAD
 
     // ── Explicit dlopen fallback ───────────────────────────────────────────────
@@ -448,6 +530,28 @@ void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *)) {
             RELOAD(cuFuncSetSharedMemConfig);
             RELOAD(cuOccupancyMaxActiveBlocksPerMultiprocessor);
             RELOAD(cuOccupancyMaxPotentialBlockSize);
+            RELOAD(cuMemcpy);
+            RELOAD(cuMemcpyAsync);
+            RELOAD(cuMemcpyPeer);
+            RELOAD(cuMemcpyPeerAsync);
+            RELOAD(cuMemGetAddressRange_v2);
+            RELOAD(cuMemHostAlloc);
+            RELOAD(cuMemFreeHost);
+            RELOAD(cuMemHostGetDevicePointer_v2);
+            RELOAD(cuMemHostGetFlags);
+            RELOAD(cuMemHostRegister_v2);
+            RELOAD(cuMemHostUnregister);
+            RELOAD(cuIpcGetMemHandle);
+            RELOAD(cuIpcOpenMemHandle_v2);
+            RELOAD(cuIpcCloseMemHandle);
+            RELOAD(cuGetErrorName);
+            RELOAD(cuGetErrorString);
+            RELOAD(cuMemAddressReserve);
+            RELOAD(cuMemRelease);
+            RELOAD(cuMemMap);
+            RELOAD(cuMemUnmap);
+            RELOAD(cuMemSetAccess);
+            RELOAD(cuMemCreate);
 #undef RELOAD
         } else {
             SHIM_DEBUG("real_cuda_init: libcuda.so.1 not found via explicit dlopen; "

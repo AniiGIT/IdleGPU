@@ -291,6 +291,14 @@ def _cuMemsetD32Async(req: dict) -> dict:  # type: ignore[type-arg]
     r = drv.cuMemsetD32Async(req["dst"], req["value"], req["count"], req["stream_handle"])
     return {"result": r}
 
+def _cuMemcpy(req: dict) -> dict:  # type: ignore[type-arg]
+    r = drv.cuMemcpy(req["dst"], req["src"], req["byte_count"])
+    return {"result": r}
+
+def _cuMemcpyAsync(req: dict) -> dict:  # type: ignore[type-arg]
+    r = drv.cuMemcpyAsync(req["dst"], req["src"], req["byte_count"], req["stream_handle"])
+    return {"result": r}
+
 def _cuMemcpyDtoDAsync(req: dict) -> dict:  # type: ignore[type-arg]
     r = drv.cuMemcpyDtoDAsync(req["dst"], req["src"], req["byte_count"], req["stream_handle"])
     return {"result": r}
@@ -422,6 +430,9 @@ _HANDLERS = {
     "cuMemsetD8Async":             _cuMemsetD8Async,
     "cuMemsetD16Async":            _cuMemsetD16Async,
     "cuMemsetD32Async":            _cuMemsetD32Async,
+    # Generic memcpy (D-to-D semantics over IPC)
+    "cuMemcpy":                    _cuMemcpy,
+    "cuMemcpyAsync":               _cuMemcpyAsync,
     # Async copies
     "cuMemcpyDtoDAsync":           _cuMemcpyDtoDAsync,
     "cuMemcpyHtoDAsync":           _cuMemcpyHtoDAsync,

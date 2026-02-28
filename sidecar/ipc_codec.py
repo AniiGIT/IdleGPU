@@ -120,6 +120,9 @@ FN_cuOccupancyMaxActiveBlocksPerMultiprocessor = 78
 # Async host↔device copies (variable-length; handled in SPECIAL section)
 FN_cuMemcpyHtoDAsync            = 79
 FN_cuMemcpyDtoHAsync            = 80
+# Generic memcpy (D-to-D semantics over IPC)
+FN_cuMemcpy                     = 81
+FN_cuMemcpyAsync                = 82
 
 # ── Simple codec table ────────────────────────────────────────────────────────
 #
@@ -201,6 +204,10 @@ _SIMPLE: dict[int, _Simple] = {
         "<QiQ", ("func_handle", "block_size", "dynamic_smem_size"),
         "<i",   ("num_blocks",),
     ),
+    # Generic memcpy: Req = {uint64 dst, uint64 src, uint64 byte_count}
+    FN_cuMemcpy:          ("cuMemcpy",          "<QQQ",  ("dst", "src", "byte_count"),             None, ()),
+    # cuMemcpyAsync adds stream: Req = {uint64 dst, uint64 src, uint64 byte_count, uint64 stream}
+    FN_cuMemcpyAsync:     ("cuMemcpyAsync",     "<QQQQ", ("dst", "src", "byte_count", "stream_handle"), None, ()),
     FN_cuModuleUnload:     ("cuModuleUnload",      "<Q",      ("mod_handle",),                          None,   ()),
     FN_cuStreamCreate:     ("cuStreamCreate",      "<I",      ("flags",),                               "<Q",   ("stream_handle",)),
     FN_cuStreamDestroy:    ("cuStreamDestroy",     "<Q",      ("stream_handle",),                       None,   ()),
