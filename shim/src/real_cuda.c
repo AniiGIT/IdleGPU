@@ -217,6 +217,69 @@ void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *)) {
     LOAD(cuGetExportTable);
 #undef LOAD
 
+    // ── Explicit dlopen fallback ───────────────────────────────────────────────
+    //
+    // RTLD_NEXT only searches libraries that were already in the dynamic linker's
+    // link chain when our constructor ran.  In NVIDIA Docker containers the driver
+    // stub (libcuda.so.1) is injected via LD_LIBRARY_PATH by the NVIDIA container
+    // runtime — but it may not have been dlopen'd yet when LD_PRELOAD fires.
+    // If RTLD_NEXT found nothing, fall back to an explicit dlopen so that the
+    // local-GPU fallback and g_local_device_count probe work correctly.
+    if (g_real.cuInit == NULL && s_real_dlopen != NULL && s_real_dlsym != NULL) {
+        // Prefer RTLD_NOLOAD: reuse an existing mapping without adding a new one.
+        void *cuda_h = s_real_dlopen("libcuda.so.1", RTLD_LAZY | RTLD_NOLOAD);
+        if (cuda_h == NULL) {
+            // Not yet loaded — load it from LD_LIBRARY_PATH.
+            cuda_h = s_real_dlopen("libcuda.so.1", RTLD_LAZY);
+        }
+        if (cuda_h != NULL) {
+            SHIM_DEBUG("real_cuda_init: RTLD_NEXT missed libcuda.so.1; "
+                       "reloading via explicit dlopen");
+            // Fill in only the pointers that are still NULL (RTLD_NEXT may have
+            // found a subset on some driver configurations).
+#define RELOAD(fn) \
+            if (g_real.fn == NULL) \
+                g_real.fn = (__typeof__(g_real.fn))s_real_dlsym(cuda_h, #fn)
+            RELOAD(cuInit);
+            RELOAD(cuDeviceGet);
+            RELOAD(cuDeviceGetCount);
+            RELOAD(cuDeviceGetName);
+            RELOAD(cuDeviceGetAttribute);
+            RELOAD(cuDeviceTotalMem);
+            RELOAD(cuCtxCreate);
+            RELOAD(cuCtxDestroy);
+            RELOAD(cuCtxSetCurrent);
+            RELOAD(cuCtxGetCurrent);
+            RELOAD(cuMemAlloc);
+            RELOAD(cuMemFree);
+            RELOAD(cuMemcpyHtoD);
+            RELOAD(cuMemcpyDtoH);
+            RELOAD(cuMemcpyDtoD);
+            RELOAD(cuMemsetD8);
+            RELOAD(cuMemsetD16);
+            RELOAD(cuMemsetD32);
+            RELOAD(cuMemGetInfo);
+            RELOAD(cuModuleLoad);
+            RELOAD(cuModuleLoadData);
+            RELOAD(cuModuleGetFunction);
+            RELOAD(cuLaunchKernel);
+            RELOAD(cuModuleUnload);
+            RELOAD(cuStreamCreate);
+            RELOAD(cuStreamDestroy);
+            RELOAD(cuStreamSynchronize);
+            RELOAD(cuStreamWaitEvent);
+            RELOAD(cuEventCreate);
+            RELOAD(cuEventDestroy);
+            RELOAD(cuEventRecord);
+            RELOAD(cuEventSynchronize);
+            RELOAD(cuGetExportTable);
+#undef RELOAD
+        } else {
+            SHIM_DEBUG("real_cuda_init: libcuda.so.1 not found via explicit dlopen; "
+                       "no local GPU fallback");
+        }
+    }
+
     SHIM_DEBUG("real_cuda_init: real CUDA fallback %s",
                g_real.cuInit != NULL ? "ready" : "unavailable (no libcuda.so.1)");
 }
