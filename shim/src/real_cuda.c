@@ -103,6 +103,7 @@ CUresult cuEventSynchronize(CUevent);
 CUresult cuGetErrorName(CUresult, const char **);
 CUresult cuGetErrorString(CUresult, const char **);
 CUresult cuGetExportTable(const void **, const CUuuid *);
+CUresult cuDriverGetVersion(int *);
 
 typedef struct { const char *name; void *fn; } ShimSym;
 
@@ -157,6 +158,7 @@ static const ShimSym s_shim_syms[] = {
     { "cuGetErrorName",           (void *)cuGetErrorName },
     { "cuGetErrorString",         (void *)cuGetErrorString },
     { "cuGetExportTable",         (void *)cuGetExportTable },
+    { "cuDriverGetVersion",       (void *)cuDriverGetVersion },
     { NULL, NULL },
 };
 
@@ -213,8 +215,9 @@ void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *)) {
     LOAD(cuEventDestroy);
     LOAD(cuEventRecord);
     LOAD(cuEventSynchronize);
-    // Runtime internal — used as local-driver fallback in cuGetExportTable.
+    // Runtime internals — used as local-driver fallbacks.
     LOAD(cuGetExportTable);
+    LOAD(cuDriverGetVersion);
 #undef LOAD
 
     // ── Explicit dlopen fallback ───────────────────────────────────────────────
@@ -273,6 +276,7 @@ void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *)) {
             RELOAD(cuEventRecord);
             RELOAD(cuEventSynchronize);
             RELOAD(cuGetExportTable);
+            RELOAD(cuDriverGetVersion);
 #undef RELOAD
         } else {
             SHIM_DEBUG("real_cuda_init: libcuda.so.1 not found via explicit dlopen; "

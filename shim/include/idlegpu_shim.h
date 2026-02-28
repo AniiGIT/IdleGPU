@@ -75,6 +75,9 @@
 #define FN_cuMemsetD32             18u
 #define FN_cuMemGetInfo            19u
 
+// Driver version (20)
+#define FN_cuDriverGetVersion      20u
+
 // Module and kernel execution (21–25)
 #define FN_cuModuleLoad            21u
 #define FN_cuModuleLoadData        22u
@@ -228,6 +231,9 @@ typedef struct __attribute__((packed)) {
     uint64_t free;
     uint64_t total;
 } Resp_cuMemGetInfo;
+
+// cuDriverGetVersion — no request payload
+typedef struct __attribute__((packed)) { int32_t version; } Resp_cuDriverGetVersion;
 
 // cuModuleLoad(fname)  → request payload is Req_cuModuleLoad + fname bytes
 typedef struct __attribute__((packed)) { uint32_t fname_len; } Req_cuModuleLoad;
@@ -442,6 +448,7 @@ typedef struct {
     CUresult (*cuEventSynchronize)(CUevent event);
     // Runtime internals with local-driver fallback
     CUresult (*cuGetExportTable)(const void **ppExportTable, const CUuuid *pExportTableId);
+    CUresult (*cuDriverGetVersion)(int *driverVersion);
 } RealCuda;
 
 // Global real CUDA function pointer table (defined in real_cuda.c).

@@ -57,6 +57,7 @@ FN_cuMemsetD8              = 16
 FN_cuMemsetD16             = 17
 FN_cuMemsetD32             = 18
 FN_cuMemGetInfo            = 19
+FN_cuDriverGetVersion      = 20
 FN_cuModuleLoad            = 21
 FN_cuModuleLoadData        = 22
 FN_cuModuleGetFunction     = 23
@@ -116,6 +117,7 @@ _SIMPLE: dict[int, _Simple] = {
     # Req_cuMemsetD32: {uint64 dst, uint32 value, uint8[4] _pad, uint64 count} packed = 24 B
     FN_cuMemsetD32:        ("cuMemsetD32",         "<QI4xQ",  ("dst", "value", "count"),                None,   ()),
     FN_cuMemGetInfo:       ("cuMemGetInfo",        None,      (),                                       "<QQ",  ("free", "total")),
+    FN_cuDriverGetVersion: ("cuDriverGetVersion",  None,      (),                                       "<i",   ("version",)),
     FN_cuModuleUnload:     ("cuModuleUnload",      "<Q",      ("mod_handle",),                          None,   ()),
     FN_cuStreamCreate:     ("cuStreamCreate",      "<I",      ("flags",),                               "<Q",   ("stream_handle",)),
     FN_cuStreamDestroy:    ("cuStreamDestroy",     "<Q",      ("stream_handle",),                       None,   ()),

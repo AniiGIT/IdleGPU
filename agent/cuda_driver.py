@@ -211,6 +211,19 @@ def cuMemGetInfo() -> tuple[int, int, int]:
     return r, int(free.value), int(total.value)
 
 
+def cuDriverGetVersion() -> tuple[int, int]:
+    """Returns (CUresult, driver_version_int).
+
+    driver_version_int encodes the installed driver version as
+    major * 1000 + minor * 10 (e.g. 12050 for driver 520.xx supporting
+    CUDA 12.5).  Required by ffmpeg's NVENC encoder initialisation.
+    """
+    lib = _ensure_loaded()
+    version = ctypes.c_int(0)
+    r = int(lib.cuDriverGetVersion(ctypes.byref(version)))
+    return r, int(version.value)
+
+
 def cuModuleLoadData(image: bytes) -> tuple[int, int]:
     lib = _ensure_loaded()
     mod = ctypes.c_void_p(0)

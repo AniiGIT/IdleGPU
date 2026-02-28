@@ -236,6 +236,11 @@ def _cuEventSynchronize(req: dict) -> dict:  # type: ignore[type-arg]
     return {"result": r}
 
 
+def _cuDriverGetVersion(req: dict) -> dict:  # type: ignore[type-arg]
+    r, version = drv.cuDriverGetVersion()
+    return {"result": r, "version": version}
+
+
 def _cuGetExportTable(req: dict) -> dict:  # type: ignore[type-arg]
     uuid_hex: str = req.get("export_table_id", "00" * 16)
     try:
@@ -281,5 +286,6 @@ _HANDLERS = {
     "cuEventDestroy":       _cuEventDestroy,
     "cuEventRecord":        _cuEventRecord,
     "cuEventSynchronize":   _cuEventSynchronize,
+    "cuDriverGetVersion":   _cuDriverGetVersion,
     "cuGetExportTable":     _cuGetExportTable,
 }

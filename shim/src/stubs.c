@@ -126,10 +126,35 @@ CUresult cuCtxDetach(CUcontext ctx) {
 
 // ── Device management (non-Tier-1) ────────────────────────────────────────────
 
+// cuDriverGetVersion — local driver first, then IPC fallback.
+//
+// ffmpeg's NVENC encoder calls cuDriverGetVersion at startup to confirm
+// the driver supports NVENC.  Local-driver path avoids an IPC round-trip
+// for the common case where a real libcuda.so.1 is loaded.
 __attribute__((visibility("default")))
 CUresult cuDriverGetVersion(int *driverVersion) {
-    (void)driverVersion;
-    SHIM_UNIMPLEMENTED("cuDriverGetVersion");
+    if (driverVersion == NULL) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+
+    // 1. Local driver — fastest path, no IPC.
+    if (g_real.cuDriverGetVersion != NULL) {
+        return g_real.cuDriverGetVersion(driverVersion);
+    }
+
+    // 2. IPC to agent — remote driver version.
+    if (g_ipc_connected) {
+        Resp_cuDriverGetVersion resp = { 0 };
+        CUresult r = ipc_call(FN_cuDriverGetVersion,
+                              NULL, 0,
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS) {
+            *driverVersion = resp.version;
+        }
+        return r;
+    }
+
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
