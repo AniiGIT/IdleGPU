@@ -114,6 +114,14 @@
 // future IPC forwarding can use a stable function ID.
 #define FN_cuGetExportTable            51u
 
+// Extended device / context (52–56) — promoted from stubs in Phase 2E.
+// Required by ffmpeg's NVENC encoder initialisation path.
+#define FN_cuDeviceComputeCapability   52u
+#define FN_cuDeviceGetUuid             53u
+#define FN_cuCtxPushCurrent            54u
+#define FN_cuCtxPopCurrent             55u
+#define FN_cuDeviceGetLuid             56u
+
 // ── IPC frame headers ─────────────────────────────────────────────────────────
 
 typedef struct __attribute__((packed)) {
@@ -315,6 +323,27 @@ typedef struct __attribute__((packed)) { uint32_t entry_count; } Resp_cuGetExpor
 // Maximum number of entries we read from an export table.
 #define EXPORT_TABLE_MAX_ENTRIES 256u
 
+// cuDeviceComputeCapability(major, minor, dev)
+typedef struct __attribute__((packed)) { int32_t  device; } Req_cuDeviceComputeCapability;
+typedef struct __attribute__((packed)) { int32_t  major; int32_t minor; } Resp_cuDeviceComputeCapability;
+
+// cuDeviceGetUuid(uuid, dev)  → response: 16-byte UUID
+typedef struct __attribute__((packed)) { int32_t  device; } Req_cuDeviceGetUuid;
+typedef struct __attribute__((packed)) { uint8_t  bytes[16]; } Resp_cuDeviceGetUuid;
+
+// cuDeviceGetLuid(luid, deviceNodeMask, dev)  → response: 8-byte LUID + uint32
+typedef struct __attribute__((packed)) { int32_t  device; } Req_cuDeviceGetLuid;
+typedef struct __attribute__((packed)) {
+    uint8_t  luid[8];
+    uint32_t device_node_mask;
+} Resp_cuDeviceGetLuid;
+
+// cuCtxPushCurrent(ctx)
+typedef struct __attribute__((packed)) { uint64_t ctx_handle; } Req_cuCtxPushCurrent;
+
+// cuCtxPopCurrent — no request payload
+typedef struct __attribute__((packed)) { uint64_t ctx_handle; } Resp_cuCtxPopCurrent;
+
 // ── IPC transport API (implemented in ipc.c) ──────────────────────────────────
 
 // Connect to the sidecar Unix socket. Returns 0 on success, -1 on error.
@@ -449,6 +478,12 @@ typedef struct {
     // Runtime internals with local-driver fallback
     CUresult (*cuGetExportTable)(const void **ppExportTable, const CUuuid *pExportTableId);
     CUresult (*cuDriverGetVersion)(int *driverVersion);
+    // Extended device / context — promoted from stubs in Phase 2E
+    CUresult (*cuDeviceComputeCapability)(int *major, int *minor, CUdevice dev);
+    CUresult (*cuDeviceGetUuid)(CUuuid *uuid, CUdevice dev);
+    CUresult (*cuDeviceGetLuid)(char *luid, unsigned int *deviceNodeMask, CUdevice dev);
+    CUresult (*cuCtxPushCurrent_v2)(CUcontext ctx);
+    CUresult (*cuCtxPopCurrent_v2)(CUcontext *pctx);
 } RealCuda;
 
 // Global real CUDA function pointer table (defined in real_cuda.c).

@@ -29,28 +29,65 @@
 
 // ── Context management (non-Tier-1) ──────────────────────────────────────────
 
+// cuCtxPushCurrent / cuCtxPushCurrent_v2 — push a context onto the calling
+// thread's CUDA context stack.  Local driver is tried first so local contexts
+// are handled without an IPC round-trip.  When only a remote GPU is present
+// (no local libcuda.so.1) the context was created via IPC and the push must
+// go to the agent.
 __attribute__((visibility("default")))
-CUresult cuCtxPopCurrent(CUcontext *pctx) {
-    (void)pctx;
-    SHIM_UNIMPLEMENTED("cuCtxPopCurrent");
-}
+CUresult cuCtxPushCurrent_v2(CUcontext ctx) {
+    // Local driver path.
+    if (g_real.cuCtxPushCurrent_v2 != NULL) {
+        return g_real.cuCtxPushCurrent_v2(ctx);
+    }
 
-__attribute__((visibility("default")))
-CUresult cuCtxPopCurrent_v2(CUcontext *pctx) {
-    (void)pctx;
-    SHIM_UNIMPLEMENTED("cuCtxPopCurrent_v2");
+    // Remote context via IPC.
+    if (g_ipc_connected) {
+        Req_cuCtxPushCurrent req = { .ctx_handle = (uint64_t)(uintptr_t)ctx };
+        return ipc_call(FN_cuCtxPushCurrent,
+                        &req, (uint32_t)sizeof(req),
+                        NULL, 0, NULL);
+    }
+
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuCtxPushCurrent(CUcontext ctx) {
-    (void)ctx;
-    SHIM_UNIMPLEMENTED("cuCtxPushCurrent");
+    // cuCtxPushCurrent is the deprecated alias for cuCtxPushCurrent_v2.
+    return cuCtxPushCurrent_v2(ctx);
 }
 
 __attribute__((visibility("default")))
-CUresult cuCtxPushCurrent_v2(CUcontext ctx) {
-    (void)ctx;
-    SHIM_UNIMPLEMENTED("cuCtxPushCurrent_v2");
+CUresult cuCtxPopCurrent_v2(CUcontext *pctx) {
+    if (pctx == NULL) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+
+    // Local driver path.
+    if (g_real.cuCtxPopCurrent_v2 != NULL) {
+        return g_real.cuCtxPopCurrent_v2(pctx);
+    }
+
+    // Remote context via IPC.
+    if (g_ipc_connected) {
+        Resp_cuCtxPopCurrent resp = { 0 };
+        CUresult r = ipc_call(FN_cuCtxPopCurrent,
+                              NULL, 0,
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS) {
+            *pctx = (CUcontext)(uintptr_t)resp.ctx_handle;
+        }
+        return r;
+    }
+
+    return CUDA_ERROR_NOT_SUPPORTED;
+}
+
+__attribute__((visibility("default")))
+CUresult cuCtxPopCurrent(CUcontext *pctx) {
+    // cuCtxPopCurrent is the deprecated alias for cuCtxPopCurrent_v2.
+    return cuCtxPopCurrent_v2(pctx);
 }
 
 __attribute__((visibility("default")))
@@ -157,10 +194,72 @@ CUresult cuDriverGetVersion(int *driverVersion) {
     return CUDA_ERROR_NOT_SUPPORTED;
 }
 
+// cuDeviceGetUuid — device-routed: local → real driver, remote → IPC.
+// Returns the 16-byte UUID identifying the physical device.
 __attribute__((visibility("default")))
-CUresult cuDeviceGetUuid(void *uuid, int dev) {
-    (void)uuid; (void)dev;
-    SHIM_UNIMPLEMENTED("cuDeviceGetUuid");
+CUresult cuDeviceGetUuid(CUuuid *uuid, CUdevice dev) {
+    if (uuid == NULL) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+
+    // Local device path.
+    if ((int)(dev) < g_local_device_count) {
+        if (g_real.cuDeviceGetUuid != NULL) {
+            return g_real.cuDeviceGetUuid(uuid, dev);
+        }
+        return CUDA_ERROR_NOT_SUPPORTED;
+    }
+
+    // Remote device via IPC.
+    if (g_ipc_connected) {
+        int remote_ord = (int)(dev) - g_local_device_count;
+        Req_cuDeviceGetUuid req = { .device = (int32_t)remote_ord };
+        Resp_cuDeviceGetUuid resp = { 0 };
+        CUresult r = ipc_call(FN_cuDeviceGetUuid,
+                              &req, (uint32_t)sizeof(req),
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS) {
+            memcpy(uuid->bytes, resp.bytes, 16);
+        }
+        return r;
+    }
+
+    return CUDA_ERROR_NOT_SUPPORTED;
+}
+
+// cuDeviceGetLuid — Windows DXGI interop identifier.
+// Local driver first; IPC fallback sends the LUID from the agent's OS.
+// On Linux both local driver and agent return NOT_SUPPORTED.
+__attribute__((visibility("default")))
+CUresult cuDeviceGetLuid(char *luid, unsigned int *deviceNodeMask, CUdevice dev) {
+    if (luid == NULL || deviceNodeMask == NULL) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+
+    // Local device path.
+    if ((int)(dev) < g_local_device_count) {
+        if (g_real.cuDeviceGetLuid != NULL) {
+            return g_real.cuDeviceGetLuid(luid, deviceNodeMask, dev);
+        }
+        return CUDA_ERROR_NOT_SUPPORTED;
+    }
+
+    // Remote device via IPC.
+    if (g_ipc_connected) {
+        int remote_ord = (int)(dev) - g_local_device_count;
+        Req_cuDeviceGetLuid req = { .device = (int32_t)remote_ord };
+        Resp_cuDeviceGetLuid resp = { 0 };
+        CUresult r = ipc_call(FN_cuDeviceGetLuid,
+                              &req, (uint32_t)sizeof(req),
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS) {
+            memcpy(luid, resp.luid, 8);
+            *deviceNodeMask = resp.device_node_mask;
+        }
+        return r;
+    }
+
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
@@ -187,10 +286,38 @@ CUresult cuDeviceGetP2PAttribute(int *value, int attrib, int srcDevice, int dstD
     SHIM_UNIMPLEMENTED("cuDeviceGetP2PAttribute");
 }
 
+// cuDeviceComputeCapability — device-routed: local devices use the real driver,
+// remote devices go via IPC.  Deprecated in CUDA 5.0 but still called by ffmpeg.
 __attribute__((visibility("default")))
-CUresult cuDeviceComputeCapability(int *major, int *minor, int dev) {
-    (void)major; (void)minor; (void)dev;
-    SHIM_UNIMPLEMENTED("cuDeviceComputeCapability");
+CUresult cuDeviceComputeCapability(int *major, int *minor, CUdevice dev) {
+    if (major == NULL || minor == NULL) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+
+    // Local device path.
+    if ((int)(dev) < g_local_device_count) {
+        if (g_real.cuDeviceComputeCapability != NULL) {
+            return g_real.cuDeviceComputeCapability(major, minor, dev);
+        }
+        return CUDA_ERROR_NOT_SUPPORTED;
+    }
+
+    // Remote device via IPC.
+    if (g_ipc_connected) {
+        int remote_ord = (int)(dev) - g_local_device_count;
+        Req_cuDeviceComputeCapability req = { .device = (int32_t)remote_ord };
+        Resp_cuDeviceComputeCapability resp = { 0 };
+        CUresult r = ipc_call(FN_cuDeviceComputeCapability,
+                              &req, (uint32_t)sizeof(req),
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS) {
+            *major = resp.major;
+            *minor = resp.minor;
+        }
+        return r;
+    }
+
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))

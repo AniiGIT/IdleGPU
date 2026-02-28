@@ -123,6 +123,57 @@ def cuDeviceTotalMem(device: int) -> tuple[int, int]:
     return r, int(mem.value)
 
 
+def cuDeviceComputeCapability(device: int) -> tuple[int, int, int]:
+    """Returns (CUresult, major, minor) compute capability for device."""
+    lib = _ensure_loaded()
+    major = ctypes.c_int(0)
+    minor = ctypes.c_int(0)
+    r = int(lib.cuDeviceComputeCapability(
+        ctypes.byref(major), ctypes.byref(minor), ctypes.c_int(device)
+    ))
+    return r, int(major.value), int(minor.value)
+
+
+def cuDeviceGetUuid(device: int) -> tuple[int, bytes]:
+    """Returns (CUresult, 16-byte UUID) for device."""
+    lib = _ensure_loaded()
+    # CUuuid is struct { unsigned char bytes[16]; }
+    uuid_buf = (ctypes.c_uint8 * 16)()
+    r = int(lib.cuDeviceGetUuid(ctypes.byref(uuid_buf), ctypes.c_int(device)))
+    uuid_bytes = bytes(uuid_buf) if r == CUDA_SUCCESS else b"\x00" * 16
+    return r, uuid_bytes
+
+
+def cuDeviceGetLuid(device: int) -> tuple[int, bytes, int]:
+    """Returns (CUresult, 8-byte LUID, deviceNodeMask).
+
+    cuDeviceGetLuid is Windows-only (DXGI interop).  On Linux libcuda.so
+    returns CUDA_ERROR_NOT_SUPPORTED.
+    """
+    lib = _ensure_loaded()
+    luid_buf = ctypes.create_string_buffer(8)
+    device_node_mask = ctypes.c_uint(0)
+    r = int(lib.cuDeviceGetLuid(
+        luid_buf, ctypes.byref(device_node_mask), ctypes.c_int(device)
+    ))
+    luid = bytes(luid_buf.raw) if r == CUDA_SUCCESS else b"\x00" * 8
+    return r, luid, int(device_node_mask.value)
+
+
+def cuCtxPushCurrent(ctx_handle: int) -> int:
+    lib = _ensure_loaded()
+    fn = getattr(lib, "cuCtxPushCurrent_v2", None) or lib.cuCtxPushCurrent
+    return int(fn(ctypes.c_void_p(ctx_handle)))
+
+
+def cuCtxPopCurrent() -> tuple[int, int]:
+    lib = _ensure_loaded()
+    ctx = ctypes.c_void_p(0)
+    fn = getattr(lib, "cuCtxPopCurrent_v2", None) or lib.cuCtxPopCurrent
+    r = int(fn(ctypes.byref(ctx)))
+    return r, _h(ctx.value)
+
+
 def cuCtxCreate(flags: int, device: int) -> tuple[int, int]:
     lib = _ensure_loaded()
     ctx = ctypes.c_void_p(0)

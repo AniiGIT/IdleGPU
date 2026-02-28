@@ -104,6 +104,14 @@ CUresult cuGetErrorName(CUresult, const char **);
 CUresult cuGetErrorString(CUresult, const char **);
 CUresult cuGetExportTable(const void **, const CUuuid *);
 CUresult cuDriverGetVersion(int *);
+// Extended device / context — Phase 2E promotions (stubs.c)
+CUresult cuDeviceComputeCapability(int *, int *, CUdevice);
+CUresult cuDeviceGetUuid(CUuuid *, CUdevice);
+CUresult cuDeviceGetLuid(char *, unsigned int *, CUdevice);
+CUresult cuCtxPushCurrent(CUcontext);
+CUresult cuCtxPushCurrent_v2(CUcontext);
+CUresult cuCtxPopCurrent(CUcontext *);
+CUresult cuCtxPopCurrent_v2(CUcontext *);
 
 typedef struct { const char *name; void *fn; } ShimSym;
 
@@ -155,10 +163,18 @@ static const ShimSym s_shim_syms[] = {
     { "cuEventRecord",            (void *)cuEventRecord },
     { "cuEventSynchronize",       (void *)cuEventSynchronize },
     // Error reporting / runtime internals
-    { "cuGetErrorName",           (void *)cuGetErrorName },
-    { "cuGetErrorString",         (void *)cuGetErrorString },
-    { "cuGetExportTable",         (void *)cuGetExportTable },
-    { "cuDriverGetVersion",       (void *)cuDriverGetVersion },
+    { "cuGetErrorName",               (void *)cuGetErrorName },
+    { "cuGetErrorString",             (void *)cuGetErrorString },
+    { "cuGetExportTable",             (void *)cuGetExportTable },
+    { "cuDriverGetVersion",           (void *)cuDriverGetVersion },
+    // Extended device / context — Phase 2E
+    { "cuDeviceComputeCapability",    (void *)cuDeviceComputeCapability },
+    { "cuDeviceGetUuid",              (void *)cuDeviceGetUuid },
+    { "cuDeviceGetLuid",              (void *)cuDeviceGetLuid },
+    { "cuCtxPushCurrent",             (void *)cuCtxPushCurrent },
+    { "cuCtxPushCurrent_v2",          (void *)cuCtxPushCurrent_v2 },
+    { "cuCtxPopCurrent",              (void *)cuCtxPopCurrent },
+    { "cuCtxPopCurrent_v2",           (void *)cuCtxPopCurrent_v2 },
     { NULL, NULL },
 };
 
@@ -218,6 +234,13 @@ void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *)) {
     // Runtime internals — used as local-driver fallbacks.
     LOAD(cuGetExportTable);
     LOAD(cuDriverGetVersion);
+    // Extended device / context — Phase 2E promotions.
+    // cuDeviceGetLuid may be NULL on Linux (Windows-specific DXGI function).
+    LOAD(cuDeviceComputeCapability);
+    LOAD(cuDeviceGetUuid);
+    LOAD(cuDeviceGetLuid);
+    LOAD(cuCtxPushCurrent_v2);
+    LOAD(cuCtxPopCurrent_v2);
 #undef LOAD
 
     // ── Explicit dlopen fallback ───────────────────────────────────────────────
@@ -277,6 +300,11 @@ void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *)) {
             RELOAD(cuEventSynchronize);
             RELOAD(cuGetExportTable);
             RELOAD(cuDriverGetVersion);
+            RELOAD(cuDeviceComputeCapability);
+            RELOAD(cuDeviceGetUuid);
+            RELOAD(cuDeviceGetLuid);
+            RELOAD(cuCtxPushCurrent_v2);
+            RELOAD(cuCtxPopCurrent_v2);
 #undef RELOAD
         } else {
             SHIM_DEBUG("real_cuda_init: libcuda.so.1 not found via explicit dlopen; "

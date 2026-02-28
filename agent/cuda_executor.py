@@ -240,6 +240,26 @@ def _cuDriverGetVersion(req: dict) -> dict:  # type: ignore[type-arg]
     r, version = drv.cuDriverGetVersion()
     return {"result": r, "version": version}
 
+def _cuDeviceComputeCapability(req: dict) -> dict:  # type: ignore[type-arg]
+    r, major, minor = drv.cuDeviceComputeCapability(req["device"])
+    return {"result": r, "major": major, "minor": minor}
+
+def _cuDeviceGetUuid(req: dict) -> dict:  # type: ignore[type-arg]
+    r, uuid_bytes = drv.cuDeviceGetUuid(req["device"])
+    return {"result": r, "uuid": uuid_bytes}
+
+def _cuDeviceGetLuid(req: dict) -> dict:  # type: ignore[type-arg]
+    r, luid, mask = drv.cuDeviceGetLuid(req["device"])
+    return {"result": r, "luid": luid, "device_node_mask": mask}
+
+def _cuCtxPushCurrent(req: dict) -> dict:  # type: ignore[type-arg]
+    r = drv.cuCtxPushCurrent(req["ctx_handle"])
+    return {"result": r}
+
+def _cuCtxPopCurrent(req: dict) -> dict:  # type: ignore[type-arg]
+    r, ctx = drv.cuCtxPopCurrent()
+    return {"result": r, "ctx_handle": ctx}
+
 
 def _cuGetExportTable(req: dict) -> dict:  # type: ignore[type-arg]
     uuid_hex: str = req.get("export_table_id", "00" * 16)
@@ -286,6 +306,11 @@ _HANDLERS = {
     "cuEventDestroy":       _cuEventDestroy,
     "cuEventRecord":        _cuEventRecord,
     "cuEventSynchronize":   _cuEventSynchronize,
-    "cuDriverGetVersion":   _cuDriverGetVersion,
-    "cuGetExportTable":     _cuGetExportTable,
+    "cuDriverGetVersion":          _cuDriverGetVersion,
+    "cuDeviceComputeCapability":   _cuDeviceComputeCapability,
+    "cuDeviceGetUuid":             _cuDeviceGetUuid,
+    "cuDeviceGetLuid":             _cuDeviceGetLuid,
+    "cuCtxPushCurrent":            _cuCtxPushCurrent,
+    "cuCtxPopCurrent":             _cuCtxPopCurrent,
+    "cuGetExportTable":            _cuGetExportTable,
 }

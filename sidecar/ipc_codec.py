@@ -82,6 +82,12 @@ FN_NvEncDestroyInputBuffer      = 48
 FN_NvEncDestroyBitstreamBuffer  = 49
 FN_NvEncDestroyEncoder          = 50
 FN_cuGetExportTable             = 51  # runtime internals
+# Extended device / context — Phase 2E promotions
+FN_cuDeviceComputeCapability    = 52
+FN_cuDeviceGetUuid              = 53
+FN_cuCtxPushCurrent             = 54
+FN_cuCtxPopCurrent              = 55
+FN_cuDeviceGetLuid              = 56
 
 # ── Simple codec table ────────────────────────────────────────────────────────
 #
@@ -117,7 +123,11 @@ _SIMPLE: dict[int, _Simple] = {
     # Req_cuMemsetD32: {uint64 dst, uint32 value, uint8[4] _pad, uint64 count} packed = 24 B
     FN_cuMemsetD32:        ("cuMemsetD32",         "<QI4xQ",  ("dst", "value", "count"),                None,   ()),
     FN_cuMemGetInfo:       ("cuMemGetInfo",        None,      (),                                       "<QQ",  ("free", "total")),
-    FN_cuDriverGetVersion: ("cuDriverGetVersion",  None,      (),                                       "<i",   ("version",)),
+    FN_cuDriverGetVersion:        ("cuDriverGetVersion",        None,  (),              "<i",  ("version",)),
+    # Phase 2E extended device / context
+    FN_cuDeviceComputeCapability: ("cuDeviceComputeCapability", "<i",  ("device",),     "<ii", ("major", "minor")),
+    FN_cuCtxPushCurrent:          ("cuCtxPushCurrent",          "<Q",  ("ctx_handle",), None,  ()),
+    FN_cuCtxPopCurrent:           ("cuCtxPopCurrent",           None,  (),              "<Q",  ("ctx_handle",)),
     FN_cuModuleUnload:     ("cuModuleUnload",      "<Q",      ("mod_handle",),                          None,   ()),
     FN_cuStreamCreate:     ("cuStreamCreate",      "<I",      ("flags",),                               "<Q",   ("stream_handle",)),
     FN_cuStreamDestroy:    ("cuStreamDestroy",     "<Q",      ("stream_handle",),                       None,   ()),
@@ -253,6 +263,14 @@ def decode_req(func_id: int, payload: bytes) -> dict:  # type: ignore[type-arg]
         uuid_hex = payload[:16].hex() if len(payload) >= 16 else "00" * 16
         return {"func": "cuGetExportTable", "export_table_id": uuid_hex}
 
+    if func_id == FN_cuDeviceGetUuid:
+        (device,) = struct.unpack_from("<i", payload)
+        return {"func": "cuDeviceGetUuid", "device": device}
+
+    if func_id == FN_cuDeviceGetLuid:
+        (device,) = struct.unpack_from("<i", payload)
+        return {"func": "cuDeviceGetLuid", "device": device}
+
     raise ValueError(f"unknown func_id {func_id}")
 
 
@@ -319,5 +337,16 @@ def encode_resp(func_id: int, cuda_result: int, resp: dict, req: dict) -> bytes:
         table_bytes: bytes = resp.get("export_table", b"")
         entry_count: int = len(table_bytes) // 8  # whole entries only
         return struct.pack("<I", entry_count) + table_bytes[: entry_count * 8]
+
+    if func_id == FN_cuDeviceGetUuid:
+        # Response payload: Resp_cuDeviceGetUuid — 16 bytes of UUID.
+        uuid_bytes: bytes = resp.get("uuid", b"")
+        return uuid_bytes[:16].ljust(16, b"\x00")
+
+    if func_id == FN_cuDeviceGetLuid:
+        # Response payload: Resp_cuDeviceGetLuid — 8-byte LUID + uint32 mask.
+        luid_bytes: bytes = resp.get("luid", b"")
+        device_node_mask: int = resp.get("device_node_mask", 0)
+        return luid_bytes[:8].ljust(8, b"\x00") + struct.pack("<I", device_node_mask)
 
     raise ValueError(f"unknown func_id {func_id} in encode_resp")
