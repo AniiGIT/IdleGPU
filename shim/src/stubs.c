@@ -428,10 +428,38 @@ CUresult cuMemFreeHost(void *p) {
     SHIM_UNIMPLEMENTED("cuMemFreeHost");
 }
 
+// cuMemAllocManaged — allocate unified managed memory.
+// Local driver first; IPC fallback when only a remote GPU is present.
+// Common flags: CU_MEM_ATTACH_GLOBAL (0x1) — accessible from any stream;
+//               CU_MEM_ATTACH_HOST   (0x2) — initially only CPU-accessible.
 __attribute__((visibility("default")))
 CUresult cuMemAllocManaged(CUdeviceptr *dptr, size_t bytesize, unsigned int flags) {
-    (void)dptr; (void)bytesize; (void)flags;
-    SHIM_UNIMPLEMENTED("cuMemAllocManaged");
+    if (dptr == NULL) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+
+    // Local driver path.
+    if (g_real.cuMemAllocManaged != NULL) {
+        return g_real.cuMemAllocManaged(dptr, bytesize, flags);
+    }
+
+    // Remote allocation via IPC.
+    if (g_ipc_connected) {
+        Req_cuMemAllocManaged req = {
+            .bytesize = (uint64_t)bytesize,
+            .flags    = (uint32_t)flags,
+        };
+        Resp_cuMemAllocManaged resp = { 0 };
+        CUresult r = ipc_call(FN_cuMemAllocManaged,
+                              &req, (uint32_t)sizeof(req),
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS) {
+            *dptr = (CUdeviceptr)resp.dptr;
+        }
+        return r;
+    }
+
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))

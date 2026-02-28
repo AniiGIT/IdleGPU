@@ -124,8 +124,9 @@
 #define FN_cuCtxSetLimit               57u
 #define FN_cuCtxGetLimit               58u
 
-// Extended memory (59–) — pitched 2D allocation.
+// Extended memory (59–) — pitched 2D and managed allocations.
 #define FN_cuMemAllocPitch             59u
+#define FN_cuMemAllocManaged           60u
 
 // ── IPC frame headers ─────────────────────────────────────────────────────────
 
@@ -372,6 +373,17 @@ typedef struct __attribute__((packed)) {
     uint64_t pitch;  // actual row pitch in bytes
 } Resp_cuMemAllocPitch;     // 16 bytes
 
+// cuMemAllocManaged(dptr, bytesize, flags)
+// Allocates unified managed memory accessible from both CPU and GPU.
+// flags: CU_MEM_ATTACH_GLOBAL (1) or CU_MEM_ATTACH_HOST (2).
+typedef struct __attribute__((packed)) {
+    uint64_t bytesize;  // allocation size in bytes
+    uint32_t flags;     // CU_MEM_ATTACH_* flags
+} Req_cuMemAllocManaged;    // 12 bytes
+typedef struct __attribute__((packed)) {
+    uint64_t dptr;      // managed device/host pointer
+} Resp_cuMemAllocManaged;   // 8 bytes
+
 // ── IPC transport API (implemented in ipc.c) ──────────────────────────────────
 
 // Connect to the sidecar Unix socket. Returns 0 on success, -1 on error.
@@ -514,10 +526,12 @@ typedef struct {
     CUresult (*cuCtxPopCurrent_v2)(CUcontext *pctx);
     CUresult (*cuCtxSetLimit)(CUlimit limit, size_t value);
     CUresult (*cuCtxGetLimit)(size_t *pvalue, CUlimit limit);
-    // Extended memory — pitched 2D allocation
+    // Extended memory — pitched 2D and managed allocations
     CUresult (*cuMemAllocPitch_v2)(CUdeviceptr *dptr, size_t *pPitch,
                                    size_t WidthInBytes, size_t Height,
                                    unsigned int ElementSizeBytes);
+    CUresult (*cuMemAllocManaged)(CUdeviceptr *dptr, size_t bytesize,
+                                  unsigned int flags);
 } RealCuda;
 
 // Global real CUDA function pointer table (defined in real_cuda.c).

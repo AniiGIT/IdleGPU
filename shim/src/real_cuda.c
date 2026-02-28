@@ -116,6 +116,7 @@ CUresult cuCtxSetLimit(CUlimit, size_t);
 CUresult cuCtxGetLimit(size_t *, CUlimit);
 CUresult cuMemAllocPitch(CUdeviceptr *, size_t *, size_t, size_t, unsigned int);
 CUresult cuMemAllocPitch_v2(CUdeviceptr *, size_t *, size_t, size_t, unsigned int);
+CUresult cuMemAllocManaged(CUdeviceptr *, size_t, unsigned int);
 
 typedef struct { const char *name; void *fn; } ShimSym;
 
@@ -181,9 +182,10 @@ static const ShimSym s_shim_syms[] = {
     { "cuCtxPopCurrent_v2",           (void *)cuCtxPopCurrent_v2 },
     { "cuCtxSetLimit",                (void *)cuCtxSetLimit },
     { "cuCtxGetLimit",                (void *)cuCtxGetLimit },
-    // Extended memory — pitched 2D allocation
+    // Extended memory — pitched 2D and managed allocations
     { "cuMemAllocPitch",              (void *)cuMemAllocPitch },
     { "cuMemAllocPitch_v2",           (void *)cuMemAllocPitch_v2 },
+    { "cuMemAllocManaged",            (void *)cuMemAllocManaged },
     { NULL, NULL },
 };
 
@@ -253,6 +255,7 @@ void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *)) {
     LOAD(cuCtxSetLimit);
     LOAD(cuCtxGetLimit);
     LOAD(cuMemAllocPitch_v2);
+    LOAD(cuMemAllocManaged);
 #undef LOAD
 
     // ── Explicit dlopen fallback ───────────────────────────────────────────────
@@ -320,6 +323,7 @@ void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *)) {
             RELOAD(cuCtxSetLimit);
             RELOAD(cuCtxGetLimit);
             RELOAD(cuMemAllocPitch_v2);
+            RELOAD(cuMemAllocManaged);
 #undef RELOAD
         } else {
             SHIM_DEBUG("real_cuda_init: libcuda.so.1 not found via explicit dlopen; "

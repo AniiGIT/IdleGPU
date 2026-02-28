@@ -90,8 +90,9 @@ FN_cuCtxPopCurrent              = 55
 FN_cuDeviceGetLuid              = 56
 FN_cuCtxSetLimit                = 57
 FN_cuCtxGetLimit                = 58
-# Extended memory — pitched 2D allocation
+# Extended memory — pitched 2D and managed allocations
 FN_cuMemAllocPitch              = 59
+FN_cuMemAllocManaged            = 60
 
 # ── Simple codec table ────────────────────────────────────────────────────────
 #
@@ -139,6 +140,9 @@ _SIMPLE: dict[int, _Simple] = {
     # Req_cuMemAllocPitch: {uint64 width_bytes, uint64 height, uint32 element_size} = 20 B
     # Resp_cuMemAllocPitch: {uint64 dptr, uint64 pitch} = 16 B
     FN_cuMemAllocPitch:           ("cuMemAllocPitch",           "<QQI", ("width_bytes", "height", "element_size"), "<QQ", ("dptr", "pitch")),
+    # Req_cuMemAllocManaged: {uint64 bytesize, uint32 flags} = 12 B
+    # Resp_cuMemAllocManaged: {uint64 dptr} = 8 B
+    FN_cuMemAllocManaged:         ("cuMemAllocManaged",         "<QI",  ("bytesize", "flags"),                     "<Q",  ("dptr",)),
     FN_cuModuleUnload:     ("cuModuleUnload",      "<Q",      ("mod_handle",),                          None,   ()),
     FN_cuStreamCreate:     ("cuStreamCreate",      "<I",      ("flags",),                               "<Q",   ("stream_handle",)),
     FN_cuStreamDestroy:    ("cuStreamDestroy",     "<Q",      ("stream_handle",),                       None,   ()),

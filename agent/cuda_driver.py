@@ -216,6 +216,22 @@ def cuMemAllocPitch(width_bytes: int, height: int, element_size: int) -> tuple[i
     return r, int(dptr.value), int(pitch.value)
 
 
+def cuMemAllocManaged(bytesize: int, flags: int) -> tuple[int, int]:
+    """Allocate unified managed memory accessible from CPU and GPU.
+
+    flags: 1 = CU_MEM_ATTACH_GLOBAL (any stream), 2 = CU_MEM_ATTACH_HOST.
+    Returns (CUresult, dptr).
+    """
+    lib = _ensure_loaded()
+    dptr = ctypes.c_uint64(0)
+    r = int(lib.cuMemAllocManaged(
+        ctypes.byref(dptr),
+        ctypes.c_size_t(bytesize),
+        ctypes.c_uint(flags),
+    ))
+    return r, int(dptr.value)
+
+
 def cuCtxCreate(flags: int, device: int) -> tuple[int, int]:
     lib = _ensure_loaded()
     ctx = ctypes.c_void_p(0)
