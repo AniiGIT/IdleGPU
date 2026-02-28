@@ -124,6 +124,9 @@
 #define FN_cuCtxSetLimit               57u
 #define FN_cuCtxGetLimit               58u
 
+// Extended memory (59–) — pitched 2D allocation.
+#define FN_cuMemAllocPitch             59u
+
 // ── IPC frame headers ─────────────────────────────────────────────────────────
 
 typedef struct __attribute__((packed)) {
@@ -356,6 +359,19 @@ typedef struct __attribute__((packed)) {
 typedef struct __attribute__((packed)) { int32_t  limit; } Req_cuCtxGetLimit;
 typedef struct __attribute__((packed)) { uint64_t value; } Resp_cuCtxGetLimit;
 
+// cuMemAllocPitch_v2(dptr, pPitch, WidthInBytes, Height, ElementSizeBytes)
+// Allocates pitched 2D device memory.  Pitch alignment is chosen by the driver
+// to satisfy ElementSizeBytes alignment and coalescing requirements.
+typedef struct __attribute__((packed)) {
+    uint64_t width_bytes;   // WidthInBytes
+    uint64_t height;        // Height (number of rows)
+    uint32_t element_size;  // ElementSizeBytes (1, 2, 4, 8, or 16)
+} Req_cuMemAllocPitch;      // 20 bytes
+typedef struct __attribute__((packed)) {
+    uint64_t dptr;   // allocated device pointer
+    uint64_t pitch;  // actual row pitch in bytes
+} Resp_cuMemAllocPitch;     // 16 bytes
+
 // ── IPC transport API (implemented in ipc.c) ──────────────────────────────────
 
 // Connect to the sidecar Unix socket. Returns 0 on success, -1 on error.
@@ -498,6 +514,10 @@ typedef struct {
     CUresult (*cuCtxPopCurrent_v2)(CUcontext *pctx);
     CUresult (*cuCtxSetLimit)(CUlimit limit, size_t value);
     CUresult (*cuCtxGetLimit)(size_t *pvalue, CUlimit limit);
+    // Extended memory — pitched 2D allocation
+    CUresult (*cuMemAllocPitch_v2)(CUdeviceptr *dptr, size_t *pPitch,
+                                   size_t WidthInBytes, size_t Height,
+                                   unsigned int ElementSizeBytes);
 } RealCuda;
 
 // Global real CUDA function pointer table (defined in real_cuda.c).

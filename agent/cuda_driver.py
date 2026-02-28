@@ -195,6 +195,27 @@ def cuCtxGetLimit(limit: int) -> tuple[int, int]:
     return r, int(pvalue.value)
 
 
+def cuMemAllocPitch(width_bytes: int, height: int, element_size: int) -> tuple[int, int, int]:
+    """Allocate pitched 2D device memory.
+
+    Returns (CUresult, dptr, pitch_bytes).
+    element_size must be 1, 2, 4, 8, or 16 (byte alignment guarantee).
+    Prefers cuMemAllocPitch_v2 when available.
+    """
+    lib = _ensure_loaded()
+    dptr = ctypes.c_uint64(0)
+    pitch = ctypes.c_size_t(0)
+    fn = getattr(lib, "cuMemAllocPitch_v2", None) or lib.cuMemAllocPitch
+    r = int(fn(
+        ctypes.byref(dptr),
+        ctypes.byref(pitch),
+        ctypes.c_size_t(width_bytes),
+        ctypes.c_size_t(height),
+        ctypes.c_uint(element_size),
+    ))
+    return r, int(dptr.value), int(pitch.value)
+
+
 def cuCtxCreate(flags: int, device: int) -> tuple[int, int]:
     lib = _ensure_loaded()
     ctx = ctypes.c_void_p(0)

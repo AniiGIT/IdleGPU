@@ -364,18 +364,50 @@ CUresult cuDeviceGetProperties(void *prop, int dev) {
 
 // ── Memory management (non-Tier-1) ────────────────────────────────────────────
 
+// cuMemAllocPitch_v2 — allocate pitched 2D device memory.
+// Local driver first (avoids IPC overhead for local contexts); IPC fallback
+// when only a remote GPU is present.  ElementSizeBytes controls the pitch
+// alignment guarantee: must be 1, 2, 4, 8, or 16.
 __attribute__((visibility("default")))
-CUresult cuMemAllocPitch(CUdeviceptr *dptr, size_t *pPitch,
-                         size_t WidthInBytes, size_t Height, unsigned int ElementSizeBytes) {
-    (void)dptr; (void)pPitch; (void)WidthInBytes; (void)Height; (void)ElementSizeBytes;
-    SHIM_UNIMPLEMENTED("cuMemAllocPitch");
+CUresult cuMemAllocPitch_v2(CUdeviceptr *dptr, size_t *pPitch,
+                             size_t WidthInBytes, size_t Height,
+                             unsigned int ElementSizeBytes) {
+    if (dptr == NULL || pPitch == NULL) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+
+    // Local driver path.
+    if (g_real.cuMemAllocPitch_v2 != NULL) {
+        return g_real.cuMemAllocPitch_v2(dptr, pPitch,
+                                         WidthInBytes, Height, ElementSizeBytes);
+    }
+
+    // Remote allocation via IPC.
+    if (g_ipc_connected) {
+        Req_cuMemAllocPitch req = {
+            .width_bytes  = (uint64_t)WidthInBytes,
+            .height       = (uint64_t)Height,
+            .element_size = (uint32_t)ElementSizeBytes,
+        };
+        Resp_cuMemAllocPitch resp = { 0 };
+        CUresult r = ipc_call(FN_cuMemAllocPitch,
+                              &req, (uint32_t)sizeof(req),
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS) {
+            *dptr   = (CUdeviceptr)resp.dptr;
+            *pPitch = (size_t)resp.pitch;
+        }
+        return r;
+    }
+
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
-CUresult cuMemAllocPitch_v2(CUdeviceptr *dptr, size_t *pPitch,
-                             size_t WidthInBytes, size_t Height, unsigned int ElementSizeBytes) {
-    (void)dptr; (void)pPitch; (void)WidthInBytes; (void)Height; (void)ElementSizeBytes;
-    SHIM_UNIMPLEMENTED("cuMemAllocPitch_v2");
+CUresult cuMemAllocPitch(CUdeviceptr *dptr, size_t *pPitch,
+                         size_t WidthInBytes, size_t Height, unsigned int ElementSizeBytes) {
+    // cuMemAllocPitch is the deprecated alias for cuMemAllocPitch_v2.
+    return cuMemAllocPitch_v2(dptr, pPitch, WidthInBytes, Height, ElementSizeBytes);
 }
 
 __attribute__((visibility("default")))

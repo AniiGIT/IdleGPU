@@ -260,6 +260,12 @@ def _cuCtxPopCurrent(req: dict) -> dict:  # type: ignore[type-arg]
     r, ctx = drv.cuCtxPopCurrent()
     return {"result": r, "ctx_handle": ctx}
 
+def _cuMemAllocPitch(req: dict) -> dict:  # type: ignore[type-arg]
+    r, dptr, pitch = drv.cuMemAllocPitch(
+        req["width_bytes"], req["height"], req["element_size"]
+    )
+    return {"result": r, "dptr": dptr, "pitch": pitch}
+
 def _cuCtxSetLimit(req: dict) -> dict:  # type: ignore[type-arg]
     r = drv.cuCtxSetLimit(req["limit"], req["value"])
     return {"result": r}
@@ -320,6 +326,7 @@ _HANDLERS = {
     "cuDeviceGetLuid":             _cuDeviceGetLuid,
     "cuCtxPushCurrent":            _cuCtxPushCurrent,
     "cuCtxPopCurrent":             _cuCtxPopCurrent,
+    "cuMemAllocPitch":             _cuMemAllocPitch,
     "cuCtxSetLimit":               _cuCtxSetLimit,
     "cuCtxGetLimit":               _cuCtxGetLimit,
     "cuGetExportTable":            _cuGetExportTable,
