@@ -114,13 +114,15 @@
 // future IPC forwarding can use a stable function ID.
 #define FN_cuGetExportTable            51u
 
-// Extended device / context (52–56) — promoted from stubs in Phase 2E.
+// Extended device / context (52–58) — promoted from stubs in Phase 2E.
 // Required by ffmpeg's NVENC encoder initialisation path.
 #define FN_cuDeviceComputeCapability   52u
 #define FN_cuDeviceGetUuid             53u
 #define FN_cuCtxPushCurrent            54u
 #define FN_cuCtxPopCurrent             55u
 #define FN_cuDeviceGetLuid             56u
+#define FN_cuCtxSetLimit               57u
+#define FN_cuCtxGetLimit               58u
 
 // ── IPC frame headers ─────────────────────────────────────────────────────────
 
@@ -344,6 +346,16 @@ typedef struct __attribute__((packed)) { uint64_t ctx_handle; } Req_cuCtxPushCur
 // cuCtxPopCurrent — no request payload
 typedef struct __attribute__((packed)) { uint64_t ctx_handle; } Resp_cuCtxPopCurrent;
 
+// cuCtxSetLimit(limit, value)
+typedef struct __attribute__((packed)) {
+    int32_t  limit;   // CUlimit enum (forwarded numerically)
+    uint64_t value;   // new limit value (size_t on 64-bit)
+} Req_cuCtxSetLimit;
+
+// cuCtxGetLimit(pvalue, limit)
+typedef struct __attribute__((packed)) { int32_t  limit; } Req_cuCtxGetLimit;
+typedef struct __attribute__((packed)) { uint64_t value; } Resp_cuCtxGetLimit;
+
 // ── IPC transport API (implemented in ipc.c) ──────────────────────────────────
 
 // Connect to the sidecar Unix socket. Returns 0 on success, -1 on error.
@@ -484,6 +496,8 @@ typedef struct {
     CUresult (*cuDeviceGetLuid)(char *luid, unsigned int *deviceNodeMask, CUdevice dev);
     CUresult (*cuCtxPushCurrent_v2)(CUcontext ctx);
     CUresult (*cuCtxPopCurrent_v2)(CUcontext *pctx);
+    CUresult (*cuCtxSetLimit)(CUlimit limit, size_t value);
+    CUresult (*cuCtxGetLimit)(size_t *pvalue, CUlimit limit);
 } RealCuda;
 
 // Global real CUDA function pointer table (defined in real_cuda.c).

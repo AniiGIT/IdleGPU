@@ -113,16 +113,52 @@ CUresult cuCtxGetFlags(unsigned int *flags) {
     SHIM_UNIMPLEMENTED("cuCtxGetFlags");
 }
 
+// cuCtxSetLimit / cuCtxGetLimit — apply to the current CUDA context.
+// No device parameter; local driver is tried first (covers local contexts
+// created by the real driver).  IPC fallback forwards to the agent's
+// current context when only a remote GPU is present.
 __attribute__((visibility("default")))
-CUresult cuCtxGetLimit(size_t *pvalue, int limit) {
-    (void)pvalue; (void)limit;
-    SHIM_UNIMPLEMENTED("cuCtxGetLimit");
+CUresult cuCtxSetLimit(CUlimit limit, size_t value) {
+    if (g_real.cuCtxSetLimit != NULL) {
+        return g_real.cuCtxSetLimit(limit, value);
+    }
+
+    if (g_ipc_connected) {
+        Req_cuCtxSetLimit req = {
+            .limit = (int32_t)limit,
+            .value = (uint64_t)value,
+        };
+        return ipc_call(FN_cuCtxSetLimit,
+                        &req, (uint32_t)sizeof(req),
+                        NULL, 0, NULL);
+    }
+
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
-CUresult cuCtxSetLimit(int limit, size_t value) {
-    (void)limit; (void)value;
-    SHIM_UNIMPLEMENTED("cuCtxSetLimit");
+CUresult cuCtxGetLimit(size_t *pvalue, CUlimit limit) {
+    if (pvalue == NULL) {
+        return CUDA_ERROR_INVALID_VALUE;
+    }
+
+    if (g_real.cuCtxGetLimit != NULL) {
+        return g_real.cuCtxGetLimit(pvalue, limit);
+    }
+
+    if (g_ipc_connected) {
+        Req_cuCtxGetLimit req = { .limit = (int32_t)limit };
+        Resp_cuCtxGetLimit resp = { 0 };
+        CUresult r = ipc_call(FN_cuCtxGetLimit,
+                              &req, (uint32_t)sizeof(req),
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS) {
+            *pvalue = (size_t)resp.value;
+        }
+        return r;
+    }
+
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))

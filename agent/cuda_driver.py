@@ -174,6 +174,27 @@ def cuCtxPopCurrent() -> tuple[int, int]:
     return r, _h(ctx.value)
 
 
+def cuCtxSetLimit(limit: int, value: int) -> int:
+    """Set a context resource limit.
+
+    limit is a CUlimit enum value (forwarded numerically).
+    value is a size_t — the new limit value.
+    """
+    lib = _ensure_loaded()
+    return int(lib.cuCtxSetLimit(ctypes.c_int(limit), ctypes.c_size_t(value)))
+
+
+def cuCtxGetLimit(limit: int) -> tuple[int, int]:
+    """Get a context resource limit.
+
+    Returns (CUresult, value) where value is the current limit as a size_t.
+    """
+    lib = _ensure_loaded()
+    pvalue = ctypes.c_size_t(0)
+    r = int(lib.cuCtxGetLimit(ctypes.byref(pvalue), ctypes.c_int(limit)))
+    return r, int(pvalue.value)
+
+
 def cuCtxCreate(flags: int, device: int) -> tuple[int, int]:
     lib = _ensure_loaded()
     ctx = ctypes.c_void_p(0)

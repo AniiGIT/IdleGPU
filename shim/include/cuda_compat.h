@@ -98,6 +98,20 @@ typedef enum CUdevice_attribute_enum {
     CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR = 76,
 } CUdevice_attribute;
 
+// ── CUlimit ───────────────────────────────────────────────────────────────────
+//
+// Forwarded numerically to the agent; the shim doesn't inspect these values.
+
+typedef enum CUlimit_enum {
+    CU_LIMIT_STACK_SIZE                       = 0x00,
+    CU_LIMIT_PRINTF_FIFO_SIZE                 = 0x01,
+    CU_LIMIT_MALLOC_HEAP_SIZE                 = 0x02,
+    CU_LIMIT_DEV_RUNTIME_SYNC_DEPTH           = 0x03,
+    CU_LIMIT_DEV_RUNTIME_PENDING_LAUNCH_COUNT = 0x04,
+    CU_LIMIT_MAX_L2_FETCH_GRANULARITY         = 0x05,
+    CU_LIMIT_PERSISTING_L2_CACHE_SIZE         = 0x06,
+} CUlimit;
+
 // ── CUuuid ────────────────────────────────────────────────────────────────────
 //
 // 16-byte UUID used by cuGetExportTable to identify capability tables.

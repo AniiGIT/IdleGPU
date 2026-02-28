@@ -88,6 +88,8 @@ FN_cuDeviceGetUuid              = 53
 FN_cuCtxPushCurrent             = 54
 FN_cuCtxPopCurrent              = 55
 FN_cuDeviceGetLuid              = 56
+FN_cuCtxSetLimit                = 57
+FN_cuCtxGetLimit                = 58
 
 # ── Simple codec table ────────────────────────────────────────────────────────
 #
@@ -128,6 +130,10 @@ _SIMPLE: dict[int, _Simple] = {
     FN_cuDeviceComputeCapability: ("cuDeviceComputeCapability", "<i",  ("device",),     "<ii", ("major", "minor")),
     FN_cuCtxPushCurrent:          ("cuCtxPushCurrent",          "<Q",  ("ctx_handle",), None,  ()),
     FN_cuCtxPopCurrent:           ("cuCtxPopCurrent",           None,  (),              "<Q",  ("ctx_handle",)),
+    # Req_cuCtxSetLimit: {int32 limit, uint64 value} = 12 B packed
+    FN_cuCtxSetLimit:             ("cuCtxSetLimit",             "<iQ", ("limit", "value"), None, ()),
+    # Req_cuCtxGetLimit: {int32 limit} = 4 B; Resp: {uint64 value} = 8 B
+    FN_cuCtxGetLimit:             ("cuCtxGetLimit",             "<i",  ("limit",),      "<Q",  ("value",)),
     FN_cuModuleUnload:     ("cuModuleUnload",      "<Q",      ("mod_handle",),                          None,   ()),
     FN_cuStreamCreate:     ("cuStreamCreate",      "<I",      ("flags",),                               "<Q",   ("stream_handle",)),
     FN_cuStreamDestroy:    ("cuStreamDestroy",     "<Q",      ("stream_handle",),                       None,   ()),

@@ -112,6 +112,8 @@ CUresult cuCtxPushCurrent(CUcontext);
 CUresult cuCtxPushCurrent_v2(CUcontext);
 CUresult cuCtxPopCurrent(CUcontext *);
 CUresult cuCtxPopCurrent_v2(CUcontext *);
+CUresult cuCtxSetLimit(CUlimit, size_t);
+CUresult cuCtxGetLimit(size_t *, CUlimit);
 
 typedef struct { const char *name; void *fn; } ShimSym;
 
@@ -175,6 +177,8 @@ static const ShimSym s_shim_syms[] = {
     { "cuCtxPushCurrent_v2",          (void *)cuCtxPushCurrent_v2 },
     { "cuCtxPopCurrent",              (void *)cuCtxPopCurrent },
     { "cuCtxPopCurrent_v2",           (void *)cuCtxPopCurrent_v2 },
+    { "cuCtxSetLimit",                (void *)cuCtxSetLimit },
+    { "cuCtxGetLimit",                (void *)cuCtxGetLimit },
     { NULL, NULL },
 };
 
@@ -241,6 +245,8 @@ void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *)) {
     LOAD(cuDeviceGetLuid);
     LOAD(cuCtxPushCurrent_v2);
     LOAD(cuCtxPopCurrent_v2);
+    LOAD(cuCtxSetLimit);
+    LOAD(cuCtxGetLimit);
 #undef LOAD
 
     // ── Explicit dlopen fallback ───────────────────────────────────────────────
@@ -305,6 +311,8 @@ void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *)) {
             RELOAD(cuDeviceGetLuid);
             RELOAD(cuCtxPushCurrent_v2);
             RELOAD(cuCtxPopCurrent_v2);
+            RELOAD(cuCtxSetLimit);
+            RELOAD(cuCtxGetLimit);
 #undef RELOAD
         } else {
             SHIM_DEBUG("real_cuda_init: libcuda.so.1 not found via explicit dlopen; "

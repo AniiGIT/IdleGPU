@@ -260,6 +260,14 @@ def _cuCtxPopCurrent(req: dict) -> dict:  # type: ignore[type-arg]
     r, ctx = drv.cuCtxPopCurrent()
     return {"result": r, "ctx_handle": ctx}
 
+def _cuCtxSetLimit(req: dict) -> dict:  # type: ignore[type-arg]
+    r = drv.cuCtxSetLimit(req["limit"], req["value"])
+    return {"result": r}
+
+def _cuCtxGetLimit(req: dict) -> dict:  # type: ignore[type-arg]
+    r, value = drv.cuCtxGetLimit(req["limit"])
+    return {"result": r, "value": value}
+
 
 def _cuGetExportTable(req: dict) -> dict:  # type: ignore[type-arg]
     uuid_hex: str = req.get("export_table_id", "00" * 16)
@@ -312,5 +320,7 @@ _HANDLERS = {
     "cuDeviceGetLuid":             _cuDeviceGetLuid,
     "cuCtxPushCurrent":            _cuCtxPushCurrent,
     "cuCtxPopCurrent":             _cuCtxPopCurrent,
+    "cuCtxSetLimit":               _cuCtxSetLimit,
+    "cuCtxGetLimit":               _cuCtxGetLimit,
     "cuGetExportTable":            _cuGetExportTable,
 }
