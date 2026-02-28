@@ -117,6 +117,41 @@ CUresult cuCtxGetLimit(size_t *, CUlimit);
 CUresult cuMemAllocPitch(CUdeviceptr *, size_t *, size_t, size_t, unsigned int);
 CUresult cuMemAllocPitch_v2(CUdeviceptr *, size_t *, size_t, size_t, unsigned int);
 CUresult cuMemAllocManaged(CUdeviceptr *, size_t, unsigned int);
+// Async memset
+CUresult cuMemsetD8Async(CUdeviceptr, unsigned char, size_t, CUstream);
+CUresult cuMemsetD16Async(CUdeviceptr, unsigned short, size_t, CUstream);
+CUresult cuMemsetD32Async(CUdeviceptr, unsigned int, size_t, CUstream);
+// Async copies
+CUresult cuMemcpyDtoDAsync(CUdeviceptr, CUdeviceptr, size_t, CUstream);
+CUresult cuMemcpyDtoDAsync_v2(CUdeviceptr, CUdeviceptr, size_t, CUstream);
+// Stream creation with priority
+CUresult cuStreamCreateWithPriority(CUstream *, unsigned int, int);
+// Stream query / inspection (local-only)
+CUresult cuStreamQuery(CUstream);
+CUresult cuStreamGetCtx(CUstream, CUcontext *);
+CUresult cuStreamGetFlags(CUstream, unsigned int *);
+CUresult cuStreamGetPriority(CUstream, int *);
+CUresult cuStreamAddCallback(CUstream, void *, void *, unsigned int);
+// Event query / timing (local-only)
+CUresult cuEventQuery(CUevent);
+CUresult cuEventElapsedTime(float *, CUevent, CUevent);
+// Context introspection
+CUresult cuCtxSynchronize(void);
+CUresult cuCtxGetDevice(CUdevice *);
+CUresult cuCtxGetFlags(unsigned int *);
+CUresult cuCtxGetApiVersion(CUcontext, unsigned int *);
+CUresult cuCtxGetCacheConfig(int *);
+CUresult cuCtxSetCacheConfig(int);
+CUresult cuCtxGetSharedMemConfig(int *);
+CUresult cuCtxSetSharedMemConfig(int);
+// Kernel / function attributes
+CUresult cuFuncGetAttribute(int *, int, CUfunction);
+CUresult cuFuncSetAttribute(CUfunction, int, int);
+CUresult cuFuncSetCacheConfig(CUfunction, int);
+CUresult cuFuncSetSharedMemConfig(CUfunction, int);
+// Occupancy
+CUresult cuOccupancyMaxActiveBlocksPerMultiprocessor(int *, CUfunction, int, size_t);
+CUresult cuOccupancyMaxPotentialBlockSize(int *, int *, CUfunction, void *, size_t, int);
 
 typedef struct { const char *name; void *fn; } ShimSym;
 
@@ -186,6 +221,43 @@ static const ShimSym s_shim_syms[] = {
     { "cuMemAllocPitch",              (void *)cuMemAllocPitch },
     { "cuMemAllocPitch_v2",           (void *)cuMemAllocPitch_v2 },
     { "cuMemAllocManaged",            (void *)cuMemAllocManaged },
+    // Async memset
+    { "cuMemsetD8Async",              (void *)cuMemsetD8Async },
+    { "cuMemsetD16Async",             (void *)cuMemsetD16Async },
+    { "cuMemsetD32Async",             (void *)cuMemsetD32Async },
+    // Async copies
+    { "cuMemcpyDtoDAsync",            (void *)cuMemcpyDtoDAsync },
+    { "cuMemcpyDtoDAsync_v2",         (void *)cuMemcpyDtoDAsync_v2 },
+    // Stream creation with priority
+    { "cuStreamCreateWithPriority",   (void *)cuStreamCreateWithPriority },
+    // Stream query / inspection
+    { "cuStreamQuery",                (void *)cuStreamQuery },
+    { "cuStreamGetCtx",               (void *)cuStreamGetCtx },
+    { "cuStreamGetFlags",             (void *)cuStreamGetFlags },
+    { "cuStreamGetPriority",          (void *)cuStreamGetPriority },
+    { "cuStreamAddCallback",          (void *)cuStreamAddCallback },
+    // Event query / timing
+    { "cuEventQuery",                 (void *)cuEventQuery },
+    { "cuEventElapsedTime",           (void *)cuEventElapsedTime },
+    // Context introspection
+    { "cuCtxSynchronize",             (void *)cuCtxSynchronize },
+    { "cuCtxGetDevice",               (void *)cuCtxGetDevice },
+    { "cuCtxGetFlags",                (void *)cuCtxGetFlags },
+    { "cuCtxGetApiVersion",           (void *)cuCtxGetApiVersion },
+    { "cuCtxGetCacheConfig",          (void *)cuCtxGetCacheConfig },
+    { "cuCtxSetCacheConfig",          (void *)cuCtxSetCacheConfig },
+    { "cuCtxGetSharedMemConfig",      (void *)cuCtxGetSharedMemConfig },
+    { "cuCtxSetSharedMemConfig",      (void *)cuCtxSetSharedMemConfig },
+    // Kernel / function attributes
+    { "cuFuncGetAttribute",           (void *)cuFuncGetAttribute },
+    { "cuFuncSetAttribute",           (void *)cuFuncSetAttribute },
+    { "cuFuncSetCacheConfig",         (void *)cuFuncSetCacheConfig },
+    { "cuFuncSetSharedMemConfig",     (void *)cuFuncSetSharedMemConfig },
+    // Occupancy
+    { "cuOccupancyMaxActiveBlocksPerMultiprocessor",
+                                      (void *)cuOccupancyMaxActiveBlocksPerMultiprocessor },
+    { "cuOccupancyMaxPotentialBlockSize",
+                                      (void *)cuOccupancyMaxPotentialBlockSize },
     { NULL, NULL },
 };
 
@@ -256,6 +328,32 @@ void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *)) {
     LOAD(cuCtxGetLimit);
     LOAD(cuMemAllocPitch_v2);
     LOAD(cuMemAllocManaged);
+    LOAD(cuMemsetD8Async);
+    LOAD(cuMemsetD16Async);
+    LOAD(cuMemsetD32Async);
+    LOAD(cuMemcpyDtoDAsync_v2);
+    LOAD(cuStreamCreateWithPriority);
+    LOAD(cuStreamQuery);
+    LOAD(cuStreamGetCtx);
+    LOAD(cuStreamGetFlags);
+    LOAD(cuStreamGetPriority);
+    LOAD(cuStreamAddCallback);
+    LOAD(cuEventQuery);
+    LOAD(cuEventElapsedTime);
+    LOAD(cuCtxSynchronize);
+    LOAD(cuCtxGetDevice);
+    LOAD(cuCtxGetFlags);
+    LOAD(cuCtxGetApiVersion);
+    LOAD(cuCtxGetCacheConfig);
+    LOAD(cuCtxSetCacheConfig);
+    LOAD(cuCtxGetSharedMemConfig);
+    LOAD(cuCtxSetSharedMemConfig);
+    LOAD(cuFuncGetAttribute);
+    LOAD(cuFuncSetAttribute);
+    LOAD(cuFuncSetCacheConfig);
+    LOAD(cuFuncSetSharedMemConfig);
+    LOAD(cuOccupancyMaxActiveBlocksPerMultiprocessor);
+    LOAD(cuOccupancyMaxPotentialBlockSize);
 #undef LOAD
 
     // ── Explicit dlopen fallback ───────────────────────────────────────────────
@@ -324,6 +422,32 @@ void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *)) {
             RELOAD(cuCtxGetLimit);
             RELOAD(cuMemAllocPitch_v2);
             RELOAD(cuMemAllocManaged);
+            RELOAD(cuMemsetD8Async);
+            RELOAD(cuMemsetD16Async);
+            RELOAD(cuMemsetD32Async);
+            RELOAD(cuMemcpyDtoDAsync_v2);
+            RELOAD(cuStreamCreateWithPriority);
+            RELOAD(cuStreamQuery);
+            RELOAD(cuStreamGetCtx);
+            RELOAD(cuStreamGetFlags);
+            RELOAD(cuStreamGetPriority);
+            RELOAD(cuStreamAddCallback);
+            RELOAD(cuEventQuery);
+            RELOAD(cuEventElapsedTime);
+            RELOAD(cuCtxSynchronize);
+            RELOAD(cuCtxGetDevice);
+            RELOAD(cuCtxGetFlags);
+            RELOAD(cuCtxGetApiVersion);
+            RELOAD(cuCtxGetCacheConfig);
+            RELOAD(cuCtxSetCacheConfig);
+            RELOAD(cuCtxGetSharedMemConfig);
+            RELOAD(cuCtxSetSharedMemConfig);
+            RELOAD(cuFuncGetAttribute);
+            RELOAD(cuFuncSetAttribute);
+            RELOAD(cuFuncSetCacheConfig);
+            RELOAD(cuFuncSetSharedMemConfig);
+            RELOAD(cuOccupancyMaxActiveBlocksPerMultiprocessor);
+            RELOAD(cuOccupancyMaxPotentialBlockSize);
 #undef RELOAD
         } else {
             SHIM_DEBUG("real_cuda_init: libcuda.so.1 not found via explicit dlopen; "

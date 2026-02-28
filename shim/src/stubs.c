@@ -24,8 +24,25 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #include "idlegpu_shim.h"
+
+// ── Fixed-header layout for variable-length async copies ─────────────────────
+// These structs describe the *fixed* header that precedes the data payload
+// when forwarding cuMemcpyHtoDAsync over IPC.  They are local to stubs.c and
+// mirror the sidecar's ipc_codec.py SPECIAL decode paths.
+typedef struct __attribute__((packed)) {
+    uint64_t dst;
+    uint64_t byte_count;
+    uint64_t stream_handle;
+} _Req_HtoDAsync_Hdr;   // 24 bytes
+
+typedef struct __attribute__((packed)) {
+    uint64_t src;
+    uint64_t byte_count;
+    uint64_t stream_handle;
+} _Req_DtoHAsync_Hdr;   // 24 bytes
 
 // ── Context management (non-Tier-1) ──────────────────────────────────────────
 
@@ -90,27 +107,65 @@ CUresult cuCtxPopCurrent(CUcontext *pctx) {
     return cuCtxPopCurrent_v2(pctx);
 }
 
+// cuCtxSynchronize — block until all work in the current context is done.
+// Local driver first; IPC fallback blocks the agent's context.
 __attribute__((visibility("default")))
 CUresult cuCtxSynchronize(void) {
-    SHIM_UNIMPLEMENTED("cuCtxSynchronize");
+    if (g_real.cuCtxSynchronize != NULL)
+        return g_real.cuCtxSynchronize();
+    if (g_ipc_connected)
+        return ipc_call(FN_cuCtxSynchronize, NULL, 0, NULL, 0, NULL);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
+// cuCtxGetDevice — return the device ordinal for the calling thread's context.
 __attribute__((visibility("default")))
 CUresult cuCtxGetDevice(int *device) {
-    (void)device;
-    SHIM_UNIMPLEMENTED("cuCtxGetDevice");
+    if (device == NULL) return CUDA_ERROR_INVALID_VALUE;
+    if (g_real.cuCtxGetDevice != NULL)
+        return g_real.cuCtxGetDevice(device);
+    if (g_ipc_connected) {
+        Resp_cuCtxGetDevice resp = { 0 };
+        CUresult r = ipc_call(FN_cuCtxGetDevice, NULL, 0,
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS) *device = resp.device;
+        return r;
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
+// cuCtxGetApiVersion — query the driver API version for a context.
 __attribute__((visibility("default")))
 CUresult cuCtxGetApiVersion(CUcontext ctx, unsigned int *version) {
-    (void)ctx; (void)version;
-    SHIM_UNIMPLEMENTED("cuCtxGetApiVersion");
+    if (version == NULL) return CUDA_ERROR_INVALID_VALUE;
+    if (g_real.cuCtxGetApiVersion != NULL)
+        return g_real.cuCtxGetApiVersion(ctx, version);
+    if (g_ipc_connected) {
+        Req_cuCtxGetApiVersion req = { .ctx_handle = (uint64_t)(uintptr_t)ctx };
+        Resp_cuCtxGetApiVersion resp = { 0 };
+        CUresult r = ipc_call(FN_cuCtxGetApiVersion,
+                              &req, (uint32_t)sizeof(req),
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS) *version = resp.version;
+        return r;
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
+// cuCtxGetFlags — return flags the calling thread's context was created with.
 __attribute__((visibility("default")))
 CUresult cuCtxGetFlags(unsigned int *flags) {
-    (void)flags;
-    SHIM_UNIMPLEMENTED("cuCtxGetFlags");
+    if (flags == NULL) return CUDA_ERROR_INVALID_VALUE;
+    if (g_real.cuCtxGetFlags != NULL)
+        return g_real.cuCtxGetFlags(flags);
+    if (g_ipc_connected) {
+        Resp_cuCtxGetFlags resp = { 0 };
+        CUresult r = ipc_call(FN_cuCtxGetFlags, NULL, 0,
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS) *flags = resp.flags;
+        return r;
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 // cuCtxSetLimit / cuCtxGetLimit — apply to the current CUDA context.
@@ -163,26 +218,56 @@ CUresult cuCtxGetLimit(size_t *pvalue, CUlimit limit) {
 
 __attribute__((visibility("default")))
 CUresult cuCtxGetCacheConfig(int *pconfig) {
-    (void)pconfig;
-    SHIM_UNIMPLEMENTED("cuCtxGetCacheConfig");
+    if (pconfig == NULL) return CUDA_ERROR_INVALID_VALUE;
+    if (g_real.cuCtxGetCacheConfig != NULL)
+        return g_real.cuCtxGetCacheConfig(pconfig);
+    if (g_ipc_connected) {
+        Resp_cuCtxGetCacheConfig resp = { 0 };
+        CUresult r = ipc_call(FN_cuCtxGetCacheConfig, NULL, 0,
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS) *pconfig = resp.config;
+        return r;
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuCtxSetCacheConfig(int config) {
-    (void)config;
-    SHIM_UNIMPLEMENTED("cuCtxSetCacheConfig");
+    if (g_real.cuCtxSetCacheConfig != NULL)
+        return g_real.cuCtxSetCacheConfig(config);
+    if (g_ipc_connected) {
+        Req_cuCtxSetCacheConfig req = { .config = (int32_t)config };
+        return ipc_call(FN_cuCtxSetCacheConfig,
+                        &req, (uint32_t)sizeof(req), NULL, 0, NULL);
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuCtxGetSharedMemConfig(int *pConfig) {
-    (void)pConfig;
-    SHIM_UNIMPLEMENTED("cuCtxGetSharedMemConfig");
+    if (pConfig == NULL) return CUDA_ERROR_INVALID_VALUE;
+    if (g_real.cuCtxGetSharedMemConfig != NULL)
+        return g_real.cuCtxGetSharedMemConfig(pConfig);
+    if (g_ipc_connected) {
+        Resp_cuCtxGetSharedMemConfig resp = { 0 };
+        CUresult r = ipc_call(FN_cuCtxGetSharedMemConfig, NULL, 0,
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS) *pConfig = resp.config;
+        return r;
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuCtxSetSharedMemConfig(int config) {
-    (void)config;
-    SHIM_UNIMPLEMENTED("cuCtxSetSharedMemConfig");
+    if (g_real.cuCtxSetSharedMemConfig != NULL)
+        return g_real.cuCtxSetSharedMemConfig(config);
+    if (g_ipc_connected) {
+        Req_cuCtxSetSharedMemConfig req = { .config = (int32_t)config };
+        return ipc_call(FN_cuCtxSetSharedMemConfig,
+                        &req, (uint32_t)sizeof(req), NULL, 0, NULL);
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
@@ -547,46 +632,96 @@ CUresult cuMemGetAddressRange_v2(CUdeviceptr *pbase, size_t *psize, CUdeviceptr 
     SHIM_UNIMPLEMENTED("cuMemGetAddressRange_v2");
 }
 
-__attribute__((visibility("default")))
-CUresult cuMemcpyHtoDAsync(CUdeviceptr dstDevice, const void *srcHost,
-                           size_t ByteCount, CUstream hStream) {
-    (void)dstDevice; (void)srcHost; (void)ByteCount; (void)hStream;
-    SHIM_UNIMPLEMENTED("cuMemcpyHtoDAsync");
-}
-
+// cuMemcpyHtoDAsync_v2 — async host→device copy on a stream.
+// Local driver: falls back to synchronous cuMemcpyHtoD (g_real field is a
+// proxy for local-driver presence; correct async is implicit via CUDA stream
+// ordering).  IPC: serialised round-trip (awaits response before return).
 __attribute__((visibility("default")))
 CUresult cuMemcpyHtoDAsync_v2(CUdeviceptr dstDevice, const void *srcHost,
                                size_t ByteCount, CUstream hStream) {
-    (void)dstDevice; (void)srcHost; (void)ByteCount; (void)hStream;
-    SHIM_UNIMPLEMENTED("cuMemcpyHtoDAsync_v2");
+    if (srcHost == NULL) return CUDA_ERROR_INVALID_VALUE;
+    // Local-driver fallback: reuse synchronous HtoD (safe — all in-process).
+    if (g_real.cuMemcpyHtoD != NULL)
+        return g_real.cuMemcpyHtoD(dstDevice, srcHost, ByteCount);
+    // IPC path: allocate combined header + data buffer.
+    if (g_ipc_connected && ByteCount <= IPC_MAX_PAYLOAD - sizeof(_Req_HtoDAsync_Hdr)) {
+        uint32_t total = (uint32_t)(sizeof(_Req_HtoDAsync_Hdr) + ByteCount);
+        uint8_t *buf = (uint8_t *)malloc(total);
+        if (buf == NULL) return CUDA_ERROR_OUT_OF_MEMORY;
+        _Req_HtoDAsync_Hdr *hdr = (_Req_HtoDAsync_Hdr *)buf;
+        hdr->dst           = (uint64_t)dstDevice;
+        hdr->byte_count    = (uint64_t)ByteCount;
+        hdr->stream_handle = (uint64_t)(uintptr_t)hStream;
+        memcpy(buf + sizeof(_Req_HtoDAsync_Hdr), srcHost, ByteCount);
+        CUresult r = ipc_call(FN_cuMemcpyHtoDAsync,
+                              buf, total, NULL, 0, NULL);
+        free(buf);
+        return r;
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
+}
+
+__attribute__((visibility("default")))
+CUresult cuMemcpyHtoDAsync(CUdeviceptr dstDevice, const void *srcHost,
+                           size_t ByteCount, CUstream hStream) {
+    return cuMemcpyHtoDAsync_v2(dstDevice, srcHost, ByteCount, hStream);
+}
+
+// cuMemcpyDtoHAsync_v2 — async device→host copy on a stream.
+__attribute__((visibility("default")))
+CUresult cuMemcpyDtoHAsync_v2(void *dstHost, CUdeviceptr srcDevice,
+                               size_t ByteCount, CUstream hStream) {
+    if (dstHost == NULL) return CUDA_ERROR_INVALID_VALUE;
+    if (g_real.cuMemcpyDtoH != NULL) {
+        // Synchronous fallback via the local driver (safe; driver DMA is async).
+        return g_real.cuMemcpyDtoH(dstHost, srcDevice, ByteCount);
+    }
+    if (g_ipc_connected) {
+        _Req_DtoHAsync_Hdr req = {
+            .src           = (uint64_t)srcDevice,
+            .byte_count    = (uint64_t)ByteCount,
+            .stream_handle = (uint64_t)(uintptr_t)hStream,
+        };
+        uint32_t resp_len = 0;
+        CUresult r = ipc_call(FN_cuMemcpyDtoHAsync,
+                              &req, (uint32_t)sizeof(req),
+                              dstHost, (uint32_t)ByteCount, &resp_len);
+        return r;
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuMemcpyDtoHAsync(void *dstHost, CUdeviceptr srcDevice,
                            size_t ByteCount, CUstream hStream) {
-    (void)dstHost; (void)srcDevice; (void)ByteCount; (void)hStream;
-    SHIM_UNIMPLEMENTED("cuMemcpyDtoHAsync");
+    return cuMemcpyDtoHAsync_v2(dstHost, srcDevice, ByteCount, hStream);
 }
 
+// cuMemcpyDtoDAsync_v2 — async device-to-device copy on a stream.
+// Local driver first; IPC fallback is serialized (awaits IPC response).
 __attribute__((visibility("default")))
-CUresult cuMemcpyDtoHAsync_v2(void *dstHost, CUdeviceptr srcDevice,
+CUresult cuMemcpyDtoDAsync_v2(CUdeviceptr dstDevice, CUdeviceptr srcDevice,
                                size_t ByteCount, CUstream hStream) {
-    (void)dstHost; (void)srcDevice; (void)ByteCount; (void)hStream;
-    SHIM_UNIMPLEMENTED("cuMemcpyDtoHAsync_v2");
+    if (g_real.cuMemcpyDtoDAsync_v2 != NULL)
+        return g_real.cuMemcpyDtoDAsync_v2(dstDevice, srcDevice,
+                                            ByteCount, hStream);
+    if (g_ipc_connected) {
+        Req_cuMemcpyDtoDAsync req = {
+            .dst           = (uint64_t)dstDevice,
+            .src           = (uint64_t)srcDevice,
+            .byte_count    = (uint64_t)ByteCount,
+            .stream_handle = (uint64_t)(uintptr_t)hStream,
+        };
+        return ipc_call(FN_cuMemcpyDtoDAsync,
+                        &req, (uint32_t)sizeof(req), NULL, 0, NULL);
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuMemcpyDtoDAsync(CUdeviceptr dstDevice, CUdeviceptr srcDevice,
                            size_t ByteCount, CUstream hStream) {
-    (void)dstDevice; (void)srcDevice; (void)ByteCount; (void)hStream;
-    SHIM_UNIMPLEMENTED("cuMemcpyDtoDAsync");
-}
-
-__attribute__((visibility("default")))
-CUresult cuMemcpyDtoDAsync_v2(CUdeviceptr dstDevice, CUdeviceptr srcDevice,
-                               size_t ByteCount, CUstream hStream) {
-    (void)dstDevice; (void)srcDevice; (void)ByteCount; (void)hStream;
-    SHIM_UNIMPLEMENTED("cuMemcpyDtoDAsync_v2");
+    return cuMemcpyDtoDAsync_v2(dstDevice, srcDevice, ByteCount, hStream);
 }
 
 __attribute__((visibility("default")))
@@ -618,25 +753,60 @@ CUresult cuMemcpyPeerAsync(CUdeviceptr dstDevice, CUcontext dstContext,
     SHIM_UNIMPLEMENTED("cuMemcpyPeerAsync");
 }
 
+// cuMemsetD8/D16/D32Async — stream-ordered memset variants.
+// Local driver first; IPC fallback when only a remote GPU is present.
 __attribute__((visibility("default")))
 CUresult cuMemsetD8Async(CUdeviceptr dstDevice, unsigned char uc,
                          size_t N, CUstream hStream) {
-    (void)dstDevice; (void)uc; (void)N; (void)hStream;
-    SHIM_UNIMPLEMENTED("cuMemsetD8Async");
+    if (g_real.cuMemsetD8Async != NULL)
+        return g_real.cuMemsetD8Async(dstDevice, uc, N, hStream);
+    if (g_ipc_connected) {
+        Req_cuMemsetD8Async req = {
+            .dst           = (uint64_t)dstDevice,
+            .value         = uc,
+            .count         = (uint64_t)N,
+            .stream_handle = (uint64_t)(uintptr_t)hStream,
+        };
+        return ipc_call(FN_cuMemsetD8Async,
+                        &req, (uint32_t)sizeof(req), NULL, 0, NULL);
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuMemsetD16Async(CUdeviceptr dstDevice, unsigned short us,
                           size_t N, CUstream hStream) {
-    (void)dstDevice; (void)us; (void)N; (void)hStream;
-    SHIM_UNIMPLEMENTED("cuMemsetD16Async");
+    if (g_real.cuMemsetD16Async != NULL)
+        return g_real.cuMemsetD16Async(dstDevice, us, N, hStream);
+    if (g_ipc_connected) {
+        Req_cuMemsetD16Async req = {
+            .dst           = (uint64_t)dstDevice,
+            .value         = us,
+            .count         = (uint64_t)N,
+            .stream_handle = (uint64_t)(uintptr_t)hStream,
+        };
+        return ipc_call(FN_cuMemsetD16Async,
+                        &req, (uint32_t)sizeof(req), NULL, 0, NULL);
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuMemsetD32Async(CUdeviceptr dstDevice, unsigned int ui,
                           size_t N, CUstream hStream) {
-    (void)dstDevice; (void)ui; (void)N; (void)hStream;
-    SHIM_UNIMPLEMENTED("cuMemsetD32Async");
+    if (g_real.cuMemsetD32Async != NULL)
+        return g_real.cuMemsetD32Async(dstDevice, ui, N, hStream);
+    if (g_ipc_connected) {
+        Req_cuMemsetD32Async req = {
+            .dst           = (uint64_t)dstDevice,
+            .value         = ui,
+            .count         = (uint64_t)N,
+            .stream_handle = (uint64_t)(uintptr_t)hStream,
+        };
+        return ipc_call(FN_cuMemsetD32Async,
+                        &req, (uint32_t)sizeof(req), NULL, 0, NULL);
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
@@ -732,28 +902,74 @@ CUresult cuLinkDestroy(void *state) {
 
 // ── Kernel / function attributes (non-Tier-1) ─────────────────────────────────
 
+// cuFuncGetAttribute — query a scalar attribute of a kernel function.
+// The function handle may be a local or remote (IPC) pointer; we rely on
+// the invariant that if g_real.cuFuncGetAttribute is available, all
+// function handles in this process were created via the local driver.
 __attribute__((visibility("default")))
 CUresult cuFuncGetAttribute(int *pi, int attrib, CUfunction hfunc) {
-    (void)pi; (void)attrib; (void)hfunc;
-    SHIM_UNIMPLEMENTED("cuFuncGetAttribute");
+    if (pi == NULL) return CUDA_ERROR_INVALID_VALUE;
+    if (g_real.cuFuncGetAttribute != NULL)
+        return g_real.cuFuncGetAttribute(pi, attrib, hfunc);
+    if (g_ipc_connected) {
+        Req_cuFuncGetAttribute req = {
+            .attrib      = (int32_t)attrib,
+            .func_handle = (uint64_t)(uintptr_t)hfunc,
+        };
+        Resp_cuFuncGetAttribute resp = { 0 };
+        CUresult r = ipc_call(FN_cuFuncGetAttribute,
+                              &req, (uint32_t)sizeof(req),
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS) *pi = resp.value;
+        return r;
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuFuncSetAttribute(CUfunction hfunc, int attrib, int value) {
-    (void)hfunc; (void)attrib; (void)value;
-    SHIM_UNIMPLEMENTED("cuFuncSetAttribute");
+    if (g_real.cuFuncSetAttribute != NULL)
+        return g_real.cuFuncSetAttribute(hfunc, attrib, value);
+    if (g_ipc_connected) {
+        Req_cuFuncSetAttribute req = {
+            .func_handle = (uint64_t)(uintptr_t)hfunc,
+            .attrib      = (int32_t)attrib,
+            .value       = (int32_t)value,
+        };
+        return ipc_call(FN_cuFuncSetAttribute,
+                        &req, (uint32_t)sizeof(req), NULL, 0, NULL);
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuFuncSetCacheConfig(CUfunction hfunc, int config) {
-    (void)hfunc; (void)config;
-    SHIM_UNIMPLEMENTED("cuFuncSetCacheConfig");
+    if (g_real.cuFuncSetCacheConfig != NULL)
+        return g_real.cuFuncSetCacheConfig(hfunc, config);
+    if (g_ipc_connected) {
+        Req_cuFuncSetCacheConfig req = {
+            .func_handle = (uint64_t)(uintptr_t)hfunc,
+            .config      = (int32_t)config,
+        };
+        return ipc_call(FN_cuFuncSetCacheConfig,
+                        &req, (uint32_t)sizeof(req), NULL, 0, NULL);
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuFuncSetSharedMemConfig(CUfunction hfunc, int config) {
-    (void)hfunc; (void)config;
-    SHIM_UNIMPLEMENTED("cuFuncSetSharedMemConfig");
+    if (g_real.cuFuncSetSharedMemConfig != NULL)
+        return g_real.cuFuncSetSharedMemConfig(hfunc, config);
+    if (g_ipc_connected) {
+        Req_cuFuncSetSharedMemConfig req = {
+            .func_handle = (uint64_t)(uintptr_t)hfunc,
+            .config      = (int32_t)config,
+        };
+        return ipc_call(FN_cuFuncSetSharedMemConfig,
+                        &req, (uint32_t)sizeof(req), NULL, 0, NULL);
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
@@ -800,29 +1016,53 @@ CUresult cuLaunchHostFunc(CUstream hStream, void (*fn)(void *), void *userData) 
     SHIM_UNIMPLEMENTED("cuLaunchHostFunc");
 }
 
+// cuOccupancyMaxActiveBlocksPerMultiprocessor — query theoretical occupancy.
+// Local driver first; IPC fallback sends function handle + parameters.
 __attribute__((visibility("default")))
 CUresult cuOccupancyMaxActiveBlocksPerMultiprocessor(int *numBlocks, CUfunction func,
                                                       int blockSize, size_t dynamicSMemSize) {
-    (void)numBlocks; (void)func; (void)blockSize; (void)dynamicSMemSize;
-    SHIM_UNIMPLEMENTED("cuOccupancyMaxActiveBlocksPerMultiprocessor");
+    if (numBlocks == NULL) return CUDA_ERROR_INVALID_VALUE;
+    if (g_real.cuOccupancyMaxActiveBlocksPerMultiprocessor != NULL)
+        return g_real.cuOccupancyMaxActiveBlocksPerMultiprocessor(
+                   numBlocks, func, blockSize, dynamicSMemSize);
+    if (g_ipc_connected) {
+        Req_cuOccupancyMaxActiveBlocksPerMultiprocessor req = {
+            .func_handle      = (uint64_t)(uintptr_t)func,
+            .block_size       = (int32_t)blockSize,
+            .dynamic_smem_size = (uint64_t)dynamicSMemSize,
+        };
+        Resp_cuOccupancyMaxActiveBlocksPerMultiprocessor resp = { 0 };
+        CUresult r = ipc_call(FN_cuOccupancyMaxActiveBlocksPerMultiprocessor,
+                              &req, (uint32_t)sizeof(req),
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS) *numBlocks = resp.num_blocks;
+        return r;
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
+// cuOccupancyMaxPotentialBlockSize — callback not serialisable over IPC;
+// local driver only.
 __attribute__((visibility("default")))
 CUresult cuOccupancyMaxPotentialBlockSize(int *minGridSize, int *blockSize,
                                           CUfunction func, void *blockSizeToDynamicSMemSize,
                                           size_t dynamicSMemSize, int blockSizeLimit) {
-    (void)minGridSize; (void)blockSize; (void)func;
-    (void)blockSizeToDynamicSMemSize; (void)dynamicSMemSize; (void)blockSizeLimit;
-    SHIM_UNIMPLEMENTED("cuOccupancyMaxPotentialBlockSize");
+    if (g_real.cuOccupancyMaxPotentialBlockSize != NULL)
+        return g_real.cuOccupancyMaxPotentialBlockSize(
+                   minGridSize, blockSize, func,
+                   blockSizeToDynamicSMemSize, dynamicSMemSize, blockSizeLimit);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 // ── Streams (non-Tier-1) ──────────────────────────────────────────────────────
 
+// cuStreamAddCallback — function pointer not serialisable over IPC; local only.
 __attribute__((visibility("default")))
 CUresult cuStreamAddCallback(CUstream hStream, void *callback,
                              void *userData, unsigned int flags) {
-    (void)hStream; (void)callback; (void)userData; (void)flags;
-    SHIM_UNIMPLEMENTED("cuStreamAddCallback");
+    if (g_real.cuStreamAddCallback != NULL)
+        return g_real.cuStreamAddCallback(hStream, callback, userData, flags);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
@@ -832,48 +1072,81 @@ CUresult cuStreamAttachMemAsync(CUstream hStream, CUdeviceptr dptr,
     SHIM_UNIMPLEMENTED("cuStreamAttachMemAsync");
 }
 
+// cuStreamQuery — non-blocking poll; local driver only (remote polling is
+// meaningless without extra latency).
 __attribute__((visibility("default")))
 CUresult cuStreamQuery(CUstream hStream) {
-    (void)hStream;
-    SHIM_UNIMPLEMENTED("cuStreamQuery");
+    if (g_real.cuStreamQuery != NULL)
+        return g_real.cuStreamQuery(hStream);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
+// cuStreamGetCtx/Flags/Priority — inspect stream state; local driver only.
 __attribute__((visibility("default")))
 CUresult cuStreamGetCtx(CUstream hStream, CUcontext *pctx) {
-    (void)hStream; (void)pctx;
-    SHIM_UNIMPLEMENTED("cuStreamGetCtx");
+    if (pctx == NULL) return CUDA_ERROR_INVALID_VALUE;
+    if (g_real.cuStreamGetCtx != NULL)
+        return g_real.cuStreamGetCtx(hStream, pctx);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuStreamGetFlags(CUstream hStream, unsigned int *flags) {
-    (void)hStream; (void)flags;
-    SHIM_UNIMPLEMENTED("cuStreamGetFlags");
+    if (flags == NULL) return CUDA_ERROR_INVALID_VALUE;
+    if (g_real.cuStreamGetFlags != NULL)
+        return g_real.cuStreamGetFlags(hStream, flags);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))
 CUresult cuStreamGetPriority(CUstream hStream, int *priority) {
-    (void)hStream; (void)priority;
-    SHIM_UNIMPLEMENTED("cuStreamGetPriority");
+    if (priority == NULL) return CUDA_ERROR_INVALID_VALUE;
+    if (g_real.cuStreamGetPriority != NULL)
+        return g_real.cuStreamGetPriority(hStream, priority);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
+// cuStreamCreateWithPriority — creates a stream with a scheduling priority.
+// Priority is a hint to the driver; local driver first; IPC fallback creates
+// the stream on the remote GPU.
 __attribute__((visibility("default")))
 CUresult cuStreamCreateWithPriority(CUstream *phStream, unsigned int flags, int priority) {
-    (void)phStream; (void)flags; (void)priority;
-    SHIM_UNIMPLEMENTED("cuStreamCreateWithPriority");
+    if (phStream == NULL) return CUDA_ERROR_INVALID_VALUE;
+    if (g_real.cuStreamCreateWithPriority != NULL)
+        return g_real.cuStreamCreateWithPriority(phStream, flags, priority);
+    if (g_ipc_connected) {
+        Req_cuStreamCreateWithPriority req = {
+            .flags    = flags,
+            .priority = (int32_t)priority,
+        };
+        Resp_cuStreamCreateWithPriority resp = { 0 };
+        CUresult r = ipc_call(FN_cuStreamCreateWithPriority,
+                              &req, (uint32_t)sizeof(req),
+                              &resp, (uint32_t)sizeof(resp), NULL);
+        if (r == CUDA_SUCCESS)
+            *phStream = (CUstream)(uintptr_t)resp.stream_handle;
+        return r;
+    }
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 // ── Events (non-Tier-1) ───────────────────────────────────────────────────────
 
+// cuEventQuery — non-blocking event status check; local driver only.
 __attribute__((visibility("default")))
 CUresult cuEventQuery(CUevent hEvent) {
-    (void)hEvent;
-    SHIM_UNIMPLEMENTED("cuEventQuery");
+    if (g_real.cuEventQuery != NULL)
+        return g_real.cuEventQuery(hEvent);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
+// cuEventElapsedTime — timing between two events; local driver only.
 __attribute__((visibility("default")))
 CUresult cuEventElapsedTime(float *pMilliseconds, CUevent hStart, CUevent hEnd) {
-    (void)pMilliseconds; (void)hStart; (void)hEnd;
-    SHIM_UNIMPLEMENTED("cuEventElapsedTime");
+    if (pMilliseconds == NULL) return CUDA_ERROR_INVALID_VALUE;
+    if (g_real.cuEventElapsedTime != NULL)
+        return g_real.cuEventElapsedTime(pMilliseconds, hStart, hEnd);
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 __attribute__((visibility("default")))

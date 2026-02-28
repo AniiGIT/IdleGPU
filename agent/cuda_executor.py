@@ -279,6 +279,89 @@ def _cuCtxGetLimit(req: dict) -> dict:  # type: ignore[type-arg]
     return {"result": r, "value": value}
 
 
+def _cuMemsetD8Async(req: dict) -> dict:  # type: ignore[type-arg]
+    r = drv.cuMemsetD8Async(req["dst"], req["value"], req["count"], req["stream_handle"])
+    return {"result": r}
+
+def _cuMemsetD16Async(req: dict) -> dict:  # type: ignore[type-arg]
+    r = drv.cuMemsetD16Async(req["dst"], req["value"], req["count"], req["stream_handle"])
+    return {"result": r}
+
+def _cuMemsetD32Async(req: dict) -> dict:  # type: ignore[type-arg]
+    r = drv.cuMemsetD32Async(req["dst"], req["value"], req["count"], req["stream_handle"])
+    return {"result": r}
+
+def _cuMemcpyDtoDAsync(req: dict) -> dict:  # type: ignore[type-arg]
+    r = drv.cuMemcpyDtoDAsync(req["dst"], req["src"], req["byte_count"], req["stream_handle"])
+    return {"result": r}
+
+def _cuMemcpyHtoDAsync(req: dict) -> dict:  # type: ignore[type-arg]
+    r = drv.cuMemcpyHtoDAsync(req["dst"], req["data"], req["stream_handle"])
+    return {"result": r}
+
+def _cuMemcpyDtoHAsync(req: dict) -> dict:  # type: ignore[type-arg]
+    r, data = drv.cuMemcpyDtoHAsync(req["src"], req["byte_count"], req["stream_handle"])
+    return {"result": r, "data": data}
+
+def _cuStreamCreateWithPriority(req: dict) -> dict:  # type: ignore[type-arg]
+    r, stream = drv.cuStreamCreateWithPriority(req["flags"], req["priority"])
+    return {"result": r, "stream_handle": stream}
+
+def _cuCtxSynchronize(req: dict) -> dict:  # type: ignore[type-arg]
+    r = drv.cuCtxSynchronize()
+    return {"result": r}
+
+def _cuCtxGetDevice(req: dict) -> dict:  # type: ignore[type-arg]
+    r, device = drv.cuCtxGetDevice()
+    return {"result": r, "device": device}
+
+def _cuCtxGetFlags(req: dict) -> dict:  # type: ignore[type-arg]
+    r, flags = drv.cuCtxGetFlags()
+    return {"result": r, "flags": flags}
+
+def _cuCtxGetApiVersion(req: dict) -> dict:  # type: ignore[type-arg]
+    r, version = drv.cuCtxGetApiVersion(req["ctx_handle"])
+    return {"result": r, "version": version}
+
+def _cuCtxGetCacheConfig(req: dict) -> dict:  # type: ignore[type-arg]
+    r, config = drv.cuCtxGetCacheConfig()
+    return {"result": r, "config": config}
+
+def _cuCtxSetCacheConfig(req: dict) -> dict:  # type: ignore[type-arg]
+    r = drv.cuCtxSetCacheConfig(req["config"])
+    return {"result": r}
+
+def _cuCtxGetSharedMemConfig(req: dict) -> dict:  # type: ignore[type-arg]
+    r, config = drv.cuCtxGetSharedMemConfig()
+    return {"result": r, "config": config}
+
+def _cuCtxSetSharedMemConfig(req: dict) -> dict:  # type: ignore[type-arg]
+    r = drv.cuCtxSetSharedMemConfig(req["config"])
+    return {"result": r}
+
+def _cuFuncGetAttribute(req: dict) -> dict:  # type: ignore[type-arg]
+    r, value = drv.cuFuncGetAttribute(req["attrib"], req["func_handle"])
+    return {"result": r, "value": value}
+
+def _cuFuncSetAttribute(req: dict) -> dict:  # type: ignore[type-arg]
+    r = drv.cuFuncSetAttribute(req["func_handle"], req["attrib"], req["value"])
+    return {"result": r}
+
+def _cuFuncSetCacheConfig(req: dict) -> dict:  # type: ignore[type-arg]
+    r = drv.cuFuncSetCacheConfig(req["func_handle"], req["config"])
+    return {"result": r}
+
+def _cuFuncSetSharedMemConfig(req: dict) -> dict:  # type: ignore[type-arg]
+    r = drv.cuFuncSetSharedMemConfig(req["func_handle"], req["config"])
+    return {"result": r}
+
+def _cuOccupancyMaxActiveBlocksPerMultiprocessor(req: dict) -> dict:  # type: ignore[type-arg]
+    r, num_blocks = drv.cuOccupancyMaxActiveBlocksPerMultiprocessor(
+        req["func_handle"], req["block_size"], req["dynamic_smem_size"]
+    )
+    return {"result": r, "num_blocks": num_blocks}
+
+
 def _cuGetExportTable(req: dict) -> dict:  # type: ignore[type-arg]
     uuid_hex: str = req.get("export_table_id", "00" * 16)
     try:
@@ -335,4 +418,31 @@ _HANDLERS = {
     "cuCtxSetLimit":               _cuCtxSetLimit,
     "cuCtxGetLimit":               _cuCtxGetLimit,
     "cuGetExportTable":            _cuGetExportTable,
+    # Async memset
+    "cuMemsetD8Async":             _cuMemsetD8Async,
+    "cuMemsetD16Async":            _cuMemsetD16Async,
+    "cuMemsetD32Async":            _cuMemsetD32Async,
+    # Async copies
+    "cuMemcpyDtoDAsync":           _cuMemcpyDtoDAsync,
+    "cuMemcpyHtoDAsync":           _cuMemcpyHtoDAsync,
+    "cuMemcpyDtoHAsync":           _cuMemcpyDtoHAsync,
+    # Stream
+    "cuStreamCreateWithPriority":  _cuStreamCreateWithPriority,
+    # Context introspection
+    "cuCtxSynchronize":            _cuCtxSynchronize,
+    "cuCtxGetDevice":              _cuCtxGetDevice,
+    "cuCtxGetFlags":               _cuCtxGetFlags,
+    "cuCtxGetApiVersion":          _cuCtxGetApiVersion,
+    "cuCtxGetCacheConfig":         _cuCtxGetCacheConfig,
+    "cuCtxSetCacheConfig":         _cuCtxSetCacheConfig,
+    "cuCtxGetSharedMemConfig":     _cuCtxGetSharedMemConfig,
+    "cuCtxSetSharedMemConfig":     _cuCtxSetSharedMemConfig,
+    # Function attributes
+    "cuFuncGetAttribute":          _cuFuncGetAttribute,
+    "cuFuncSetAttribute":          _cuFuncSetAttribute,
+    "cuFuncSetCacheConfig":        _cuFuncSetCacheConfig,
+    "cuFuncSetSharedMemConfig":    _cuFuncSetSharedMemConfig,
+    # Occupancy
+    "cuOccupancyMaxActiveBlocksPerMultiprocessor":
+                                   _cuOccupancyMaxActiveBlocksPerMultiprocessor,
 }

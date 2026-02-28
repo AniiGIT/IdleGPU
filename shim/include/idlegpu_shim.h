@@ -124,9 +124,45 @@
 #define FN_cuCtxSetLimit               57u
 #define FN_cuCtxGetLimit               58u
 
-// Extended memory (59–) — pitched 2D and managed allocations.
+// Extended memory (59–60) — pitched 2D and managed allocations.
 #define FN_cuMemAllocPitch             59u
 #define FN_cuMemAllocManaged           60u
+
+// Async memset (61–63) — stream-ordered variants of cuMemsetD8/D16/D32.
+#define FN_cuMemsetD8Async             61u
+#define FN_cuMemsetD16Async            62u
+#define FN_cuMemsetD32Async            63u
+
+// Async device-to-device copy (64).
+#define FN_cuMemcpyDtoDAsync           64u
+
+// Async host↔device copies (79–80).
+// Request for HtoD: _Req_HtoDAsync_Hdr (24 B) + byte_count bytes of data.
+// Request for DtoH: _Req_DtoHAsync_Hdr (24 B); response is byte_count bytes.
+#define FN_cuMemcpyHtoDAsync           79u
+#define FN_cuMemcpyDtoHAsync           80u
+
+// Stream creation with priority (65).
+#define FN_cuStreamCreateWithPriority  65u
+
+// Context introspection (66–73) — queried/set on the calling thread's context.
+#define FN_cuCtxSynchronize            66u
+#define FN_cuCtxGetDevice              67u
+#define FN_cuCtxGetFlags               68u
+#define FN_cuCtxGetApiVersion          69u
+#define FN_cuCtxGetCacheConfig         70u
+#define FN_cuCtxSetCacheConfig         71u
+#define FN_cuCtxGetSharedMemConfig     72u
+#define FN_cuCtxSetSharedMemConfig     73u
+
+// Kernel / function attribute queries and settings (74–77).
+#define FN_cuFuncGetAttribute          74u
+#define FN_cuFuncSetAttribute          75u
+#define FN_cuFuncSetCacheConfig        76u
+#define FN_cuFuncSetSharedMemConfig    77u
+
+// Occupancy (78) — requires function handle (from cuModuleGetFunction).
+#define FN_cuOccupancyMaxActiveBlocksPerMultiprocessor 78u
 
 // ── IPC frame headers ─────────────────────────────────────────────────────────
 
@@ -384,6 +420,108 @@ typedef struct __attribute__((packed)) {
     uint64_t dptr;      // managed device/host pointer
 } Resp_cuMemAllocManaged;   // 8 bytes
 
+// cuMemsetD8Async / cuMemsetD16Async / cuMemsetD32Async
+// Stream-ordered memset: fills N elements on dstDevice using hStream.
+// Struct layout mirrors Req_cuMemsetD8/D16/D32 with stream_handle appended.
+typedef struct __attribute__((packed)) {
+    uint64_t dst;
+    uint8_t  value;
+    uint8_t  _pad[7];
+    uint64_t count;
+    uint64_t stream_handle;
+} Req_cuMemsetD8Async;   // 32 bytes
+
+typedef struct __attribute__((packed)) {
+    uint64_t dst;
+    uint16_t value;
+    uint8_t  _pad[6];
+    uint64_t count;
+    uint64_t stream_handle;
+} Req_cuMemsetD16Async;  // 32 bytes
+
+typedef struct __attribute__((packed)) {
+    uint64_t dst;
+    uint32_t value;
+    uint8_t  _pad[4];
+    uint64_t count;
+    uint64_t stream_handle;
+} Req_cuMemsetD32Async;  // 32 bytes
+
+// cuMemcpyDtoDAsync_v2(dstDevice, srcDevice, ByteCount, hStream)
+typedef struct __attribute__((packed)) {
+    uint64_t dst;
+    uint64_t src;
+    uint64_t byte_count;
+    uint64_t stream_handle;
+} Req_cuMemcpyDtoDAsync;  // 32 bytes
+
+// cuStreamCreateWithPriority(phStream, flags, priority)
+typedef struct __attribute__((packed)) {
+    uint32_t flags;
+    int32_t  priority;
+} Req_cuStreamCreateWithPriority;   // 8 bytes
+typedef struct __attribute__((packed)) {
+    uint64_t stream_handle;
+} Resp_cuStreamCreateWithPriority;  // 8 bytes
+
+// cuCtxSynchronize — no request payload, no response payload (result only)
+
+// cuCtxGetDevice — no request payload
+typedef struct __attribute__((packed)) { int32_t  device; } Resp_cuCtxGetDevice;
+
+// cuCtxGetFlags — no request payload
+typedef struct __attribute__((packed)) { uint32_t flags; } Resp_cuCtxGetFlags;
+
+// cuCtxGetApiVersion(ctx, version)
+typedef struct __attribute__((packed)) { uint64_t ctx_handle; } Req_cuCtxGetApiVersion;
+typedef struct __attribute__((packed)) { uint32_t version; } Resp_cuCtxGetApiVersion;
+
+// cuCtxGetCacheConfig — no request payload  (CUfunc_cache enum)
+typedef struct __attribute__((packed)) { int32_t  config; } Resp_cuCtxGetCacheConfig;
+
+// cuCtxSetCacheConfig(config)
+typedef struct __attribute__((packed)) { int32_t  config; } Req_cuCtxSetCacheConfig;
+
+// cuCtxGetSharedMemConfig — no request payload  (CUsharedconfig enum)
+typedef struct __attribute__((packed)) { int32_t  config; } Resp_cuCtxGetSharedMemConfig;
+
+// cuCtxSetSharedMemConfig(config)
+typedef struct __attribute__((packed)) { int32_t  config; } Req_cuCtxSetSharedMemConfig;
+
+// cuFuncGetAttribute(pi, attrib, hfunc)
+typedef struct __attribute__((packed)) {
+    int32_t  attrib;
+    uint64_t func_handle;
+} Req_cuFuncGetAttribute;   // 12 bytes
+typedef struct __attribute__((packed)) { int32_t value; } Resp_cuFuncGetAttribute;
+
+// cuFuncSetAttribute(hfunc, attrib, value)
+typedef struct __attribute__((packed)) {
+    uint64_t func_handle;
+    int32_t  attrib;
+    int32_t  value;
+} Req_cuFuncSetAttribute;   // 16 bytes
+
+// cuFuncSetCacheConfig(hfunc, config)
+typedef struct __attribute__((packed)) {
+    uint64_t func_handle;
+    int32_t  config;
+} Req_cuFuncSetCacheConfig;  // 12 bytes
+
+// cuFuncSetSharedMemConfig(hfunc, config)
+typedef struct __attribute__((packed)) {
+    uint64_t func_handle;
+    int32_t  config;
+} Req_cuFuncSetSharedMemConfig;  // 12 bytes
+
+// cuOccupancyMaxActiveBlocksPerMultiprocessor(numBlocks, func, blockSize, dynSmem)
+typedef struct __attribute__((packed)) {
+    uint64_t func_handle;
+    int32_t  block_size;
+    uint64_t dynamic_smem_size;
+} Req_cuOccupancyMaxActiveBlocksPerMultiprocessor;  // 20 bytes
+typedef struct __attribute__((packed)) { int32_t num_blocks; } Resp_cuOccupancyMaxActiveBlocksPerMultiprocessor;
+
 // ── IPC transport API (implemented in ipc.c) ──────────────────────────────────
 
 // Connect to the sidecar Unix socket. Returns 0 on success, -1 on error.
@@ -532,6 +670,52 @@ typedef struct {
                                    unsigned int ElementSizeBytes);
     CUresult (*cuMemAllocManaged)(CUdeviceptr *dptr, size_t bytesize,
                                   unsigned int flags);
+    // Async memset
+    CUresult (*cuMemsetD8Async)(CUdeviceptr dst, unsigned char uc,
+                                size_t N, CUstream hStream);
+    CUresult (*cuMemsetD16Async)(CUdeviceptr dst, unsigned short us,
+                                 size_t N, CUstream hStream);
+    CUresult (*cuMemsetD32Async)(CUdeviceptr dst, unsigned int ui,
+                                 size_t N, CUstream hStream);
+    // Async copy
+    CUresult (*cuMemcpyDtoDAsync_v2)(CUdeviceptr dstDevice, CUdeviceptr srcDevice,
+                                      size_t ByteCount, CUstream hStream);
+    // Stream creation with priority
+    CUresult (*cuStreamCreateWithPriority)(CUstream *phStream,
+                                           unsigned int flags, int priority);
+    // Stream query (local-only; not forwarded via IPC)
+    CUresult (*cuStreamQuery)(CUstream hStream);
+    CUresult (*cuStreamGetCtx)(CUstream hStream, CUcontext *pctx);
+    CUresult (*cuStreamGetFlags)(CUstream hStream, unsigned int *flags);
+    CUresult (*cuStreamGetPriority)(CUstream hStream, int *priority);
+    CUresult (*cuStreamAddCallback)(CUstream hStream, void *callback,
+                                    void *userData, unsigned int flags);
+    // Event query / timing (local-only; not forwarded via IPC)
+    CUresult (*cuEventQuery)(CUevent hEvent);
+    CUresult (*cuEventElapsedTime)(float *pMilliseconds,
+                                   CUevent hStart, CUevent hEnd);
+    // Context introspection
+    CUresult (*cuCtxSynchronize)(void);
+    CUresult (*cuCtxGetDevice)(CUdevice *device);
+    CUresult (*cuCtxGetFlags)(unsigned int *flags);
+    CUresult (*cuCtxGetApiVersion)(CUcontext ctx, unsigned int *version);
+    CUresult (*cuCtxGetCacheConfig)(int *pconfig);
+    CUresult (*cuCtxSetCacheConfig)(int config);
+    CUresult (*cuCtxGetSharedMemConfig)(int *pConfig);
+    CUresult (*cuCtxSetSharedMemConfig)(int config);
+    // Kernel / function attributes
+    CUresult (*cuFuncGetAttribute)(int *pi, int attrib, CUfunction hfunc);
+    CUresult (*cuFuncSetAttribute)(CUfunction hfunc, int attrib, int value);
+    CUresult (*cuFuncSetCacheConfig)(CUfunction hfunc, int config);
+    CUresult (*cuFuncSetSharedMemConfig)(CUfunction hfunc, int config);
+    // Occupancy
+    CUresult (*cuOccupancyMaxActiveBlocksPerMultiprocessor)(
+                  int *numBlocks, CUfunction func,
+                  int blockSize, size_t dynamicSMemSize);
+    CUresult (*cuOccupancyMaxPotentialBlockSize)(
+                  int *minGridSize, int *blockSize,
+                  CUfunction func, void *blockSizeToDynamicSMemSize,
+                  size_t dynamicSMemSize, int blockSizeLimit);
 } RealCuda;
 
 // Global real CUDA function pointer table (defined in real_cuda.c).

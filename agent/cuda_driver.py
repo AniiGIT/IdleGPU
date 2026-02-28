@@ -232,6 +232,204 @@ def cuMemAllocManaged(bytesize: int, flags: int) -> tuple[int, int]:
     return r, int(dptr.value)
 
 
+def cuMemsetD8Async(dst: int, value: int, count: int, stream_handle: int) -> int:
+    lib = _ensure_loaded()
+    return int(lib.cuMemsetD8Async(
+        ctypes.c_uint64(dst), ctypes.c_ubyte(value),
+        ctypes.c_size_t(count), ctypes.c_void_p(stream_handle),
+    ))
+
+
+def cuMemsetD16Async(dst: int, value: int, count: int, stream_handle: int) -> int:
+    lib = _ensure_loaded()
+    return int(lib.cuMemsetD16Async(
+        ctypes.c_uint64(dst), ctypes.c_ushort(value),
+        ctypes.c_size_t(count), ctypes.c_void_p(stream_handle),
+    ))
+
+
+def cuMemsetD32Async(dst: int, value: int, count: int, stream_handle: int) -> int:
+    lib = _ensure_loaded()
+    return int(lib.cuMemsetD32Async(
+        ctypes.c_uint64(dst), ctypes.c_uint(value),
+        ctypes.c_size_t(count), ctypes.c_void_p(stream_handle),
+    ))
+
+
+def cuMemcpyDtoDAsync(dst: int, src: int, byte_count: int, stream_handle: int) -> int:
+    lib = _ensure_loaded()
+    fn = getattr(lib, "cuMemcpyDtoDAsync_v2", None) or lib.cuMemcpyDtoDAsync
+    return int(fn(
+        ctypes.c_uint64(dst), ctypes.c_uint64(src),
+        ctypes.c_size_t(byte_count), ctypes.c_void_p(stream_handle),
+    ))
+
+
+def cuMemcpyHtoDAsync(dst: int, data: bytes, stream_handle: int) -> int:
+    lib = _ensure_loaded()
+    fn = getattr(lib, "cuMemcpyHtoDAsync_v2", None) or lib.cuMemcpyHtoDAsync
+    return int(fn(
+        ctypes.c_uint64(dst), data,
+        ctypes.c_size_t(len(data)), ctypes.c_void_p(stream_handle),
+    ))
+
+
+def cuMemcpyDtoHAsync(src: int, byte_count: int, stream_handle: int) -> tuple[int, bytes]:
+    lib = _ensure_loaded()
+    buf = ctypes.create_string_buffer(byte_count)
+    fn = getattr(lib, "cuMemcpyDtoHAsync_v2", None) or lib.cuMemcpyDtoHAsync
+    r = int(fn(buf, ctypes.c_uint64(src),
+               ctypes.c_size_t(byte_count), ctypes.c_void_p(stream_handle)))
+    return r, bytes(buf.raw) if r == CUDA_SUCCESS else b""
+
+
+def cuStreamCreateWithPriority(flags: int, priority: int) -> tuple[int, int]:
+    lib = _ensure_loaded()
+    stream = ctypes.c_void_p(0)
+    r = int(lib.cuStreamCreateWithPriority(
+        ctypes.byref(stream), ctypes.c_uint(flags), ctypes.c_int(priority)
+    ))
+    return r, _h(stream.value)
+
+
+def cuStreamQuery(stream_handle: int) -> int:
+    lib = _ensure_loaded()
+    return int(lib.cuStreamQuery(ctypes.c_void_p(stream_handle)))
+
+
+def cuStreamGetCtx(stream_handle: int) -> tuple[int, int]:
+    lib = _ensure_loaded()
+    ctx = ctypes.c_void_p(0)
+    r = int(lib.cuStreamGetCtx(ctypes.c_void_p(stream_handle), ctypes.byref(ctx)))
+    return r, _h(ctx.value)
+
+
+def cuStreamGetFlags(stream_handle: int) -> tuple[int, int]:
+    lib = _ensure_loaded()
+    flags = ctypes.c_uint(0)
+    r = int(lib.cuStreamGetFlags(ctypes.c_void_p(stream_handle), ctypes.byref(flags)))
+    return r, int(flags.value)
+
+
+def cuStreamGetPriority(stream_handle: int) -> tuple[int, int]:
+    lib = _ensure_loaded()
+    priority = ctypes.c_int(0)
+    r = int(lib.cuStreamGetPriority(ctypes.c_void_p(stream_handle), ctypes.byref(priority)))
+    return r, int(priority.value)
+
+
+def cuEventQuery(event_handle: int) -> int:
+    lib = _ensure_loaded()
+    return int(lib.cuEventQuery(ctypes.c_void_p(event_handle)))
+
+
+def cuEventElapsedTime(start_handle: int, end_handle: int) -> tuple[int, float]:
+    lib = _ensure_loaded()
+    ms = ctypes.c_float(0.0)
+    r = int(lib.cuEventElapsedTime(
+        ctypes.byref(ms),
+        ctypes.c_void_p(start_handle),
+        ctypes.c_void_p(end_handle),
+    ))
+    return r, float(ms.value)
+
+
+def cuCtxSynchronize() -> int:
+    lib = _ensure_loaded()
+    return int(lib.cuCtxSynchronize())
+
+
+def cuCtxGetDevice() -> tuple[int, int]:
+    lib = _ensure_loaded()
+    dev = ctypes.c_int(0)
+    r = int(lib.cuCtxGetDevice(ctypes.byref(dev)))
+    return r, int(dev.value)
+
+
+def cuCtxGetFlags() -> tuple[int, int]:
+    lib = _ensure_loaded()
+    flags = ctypes.c_uint(0)
+    r = int(lib.cuCtxGetFlags(ctypes.byref(flags)))
+    return r, int(flags.value)
+
+
+def cuCtxGetApiVersion(ctx_handle: int) -> tuple[int, int]:
+    lib = _ensure_loaded()
+    version = ctypes.c_uint(0)
+    r = int(lib.cuCtxGetApiVersion(
+        ctypes.c_void_p(ctx_handle), ctypes.byref(version)
+    ))
+    return r, int(version.value)
+
+
+def cuCtxGetCacheConfig() -> tuple[int, int]:
+    lib = _ensure_loaded()
+    config = ctypes.c_int(0)
+    r = int(lib.cuCtxGetCacheConfig(ctypes.byref(config)))
+    return r, int(config.value)
+
+
+def cuCtxSetCacheConfig(config: int) -> int:
+    lib = _ensure_loaded()
+    return int(lib.cuCtxSetCacheConfig(ctypes.c_int(config)))
+
+
+def cuCtxGetSharedMemConfig() -> tuple[int, int]:
+    lib = _ensure_loaded()
+    config = ctypes.c_int(0)
+    r = int(lib.cuCtxGetSharedMemConfig(ctypes.byref(config)))
+    return r, int(config.value)
+
+
+def cuCtxSetSharedMemConfig(config: int) -> int:
+    lib = _ensure_loaded()
+    return int(lib.cuCtxSetSharedMemConfig(ctypes.c_int(config)))
+
+
+def cuFuncGetAttribute(attrib: int, func_handle: int) -> tuple[int, int]:
+    lib = _ensure_loaded()
+    value = ctypes.c_int(0)
+    r = int(lib.cuFuncGetAttribute(
+        ctypes.byref(value), ctypes.c_int(attrib), ctypes.c_void_p(func_handle)
+    ))
+    return r, int(value.value)
+
+
+def cuFuncSetAttribute(func_handle: int, attrib: int, value: int) -> int:
+    lib = _ensure_loaded()
+    return int(lib.cuFuncSetAttribute(
+        ctypes.c_void_p(func_handle), ctypes.c_int(attrib), ctypes.c_int(value)
+    ))
+
+
+def cuFuncSetCacheConfig(func_handle: int, config: int) -> int:
+    lib = _ensure_loaded()
+    return int(lib.cuFuncSetCacheConfig(
+        ctypes.c_void_p(func_handle), ctypes.c_int(config)
+    ))
+
+
+def cuFuncSetSharedMemConfig(func_handle: int, config: int) -> int:
+    lib = _ensure_loaded()
+    return int(lib.cuFuncSetSharedMemConfig(
+        ctypes.c_void_p(func_handle), ctypes.c_int(config)
+    ))
+
+
+def cuOccupancyMaxActiveBlocksPerMultiprocessor(
+    func_handle: int, block_size: int, dynamic_smem_size: int
+) -> tuple[int, int]:
+    lib = _ensure_loaded()
+    num_blocks = ctypes.c_int(0)
+    r = int(lib.cuOccupancyMaxActiveBlocksPerMultiprocessor(
+        ctypes.byref(num_blocks),
+        ctypes.c_void_p(func_handle),
+        ctypes.c_int(block_size),
+        ctypes.c_size_t(dynamic_smem_size),
+    ))
+    return r, int(num_blocks.value)
+
+
 def cuCtxCreate(flags: int, device: int) -> tuple[int, int]:
     lib = _ensure_loaded()
     ctx = ctypes.c_void_p(0)

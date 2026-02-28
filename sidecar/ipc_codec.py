@@ -93,6 +93,33 @@ FN_cuCtxGetLimit                = 58
 # Extended memory — pitched 2D and managed allocations
 FN_cuMemAllocPitch              = 59
 FN_cuMemAllocManaged            = 60
+# Async memset (stream-ordered)
+FN_cuMemsetD8Async              = 61
+FN_cuMemsetD16Async             = 62
+FN_cuMemsetD32Async             = 63
+# Async copies
+FN_cuMemcpyDtoDAsync            = 64
+# Stream creation with priority
+FN_cuStreamCreateWithPriority   = 65
+# Context introspection
+FN_cuCtxSynchronize             = 66
+FN_cuCtxGetDevice               = 67
+FN_cuCtxGetFlags                = 68
+FN_cuCtxGetApiVersion           = 69
+FN_cuCtxGetCacheConfig          = 70
+FN_cuCtxSetCacheConfig          = 71
+FN_cuCtxGetSharedMemConfig      = 72
+FN_cuCtxSetSharedMemConfig      = 73
+# Kernel / function attributes
+FN_cuFuncGetAttribute           = 74
+FN_cuFuncSetAttribute           = 75
+FN_cuFuncSetCacheConfig         = 76
+FN_cuFuncSetSharedMemConfig     = 77
+# Occupancy
+FN_cuOccupancyMaxActiveBlocksPerMultiprocessor = 78
+# Async host↔device copies (variable-length; handled in SPECIAL section)
+FN_cuMemcpyHtoDAsync            = 79
+FN_cuMemcpyDtoHAsync            = 80
 
 # ── Simple codec table ────────────────────────────────────────────────────────
 #
@@ -143,6 +170,37 @@ _SIMPLE: dict[int, _Simple] = {
     # Req_cuMemAllocManaged: {uint64 bytesize, uint32 flags} = 12 B
     # Resp_cuMemAllocManaged: {uint64 dptr} = 8 B
     FN_cuMemAllocManaged:         ("cuMemAllocManaged",         "<QI",  ("bytesize", "flags"),                     "<Q",  ("dptr",)),
+    # Async memset: Req = {uint64 dst, uint8/uint16/uint32 value, pad, uint64 count, uint64 stream}
+    FN_cuMemsetD8Async:   ("cuMemsetD8Async",   "<QB7xQQ", ("dst", "value", "count", "stream_handle"), None, ()),
+    FN_cuMemsetD16Async:  ("cuMemsetD16Async",  "<QH6xQQ", ("dst", "value", "count", "stream_handle"), None, ()),
+    FN_cuMemsetD32Async:  ("cuMemsetD32Async",  "<QI4xQQ", ("dst", "value", "count", "stream_handle"), None, ()),
+    # Async D-to-D: Req = {uint64 dst, uint64 src, uint64 byte_count, uint64 stream}
+    FN_cuMemcpyDtoDAsync: ("cuMemcpyDtoDAsync", "<QQQQ",   ("dst", "src", "byte_count", "stream_handle"), None, ()),
+    # Stream creation with priority: Req = {uint32 flags, int32 priority}; Resp = {uint64 stream_handle}
+    FN_cuStreamCreateWithPriority: ("cuStreamCreateWithPriority", "<Ii", ("flags", "priority"), "<Q", ("stream_handle",)),
+    # Context introspection
+    FN_cuCtxSynchronize:       ("cuCtxSynchronize",       None,  (),                    None,  ()),
+    FN_cuCtxGetDevice:         ("cuCtxGetDevice",         None,  (),                    "<i",  ("device",)),
+    FN_cuCtxGetFlags:          ("cuCtxGetFlags",          None,  (),                    "<I",  ("flags",)),
+    FN_cuCtxGetApiVersion:     ("cuCtxGetApiVersion",     "<Q",  ("ctx_handle",),        "<I",  ("version",)),
+    FN_cuCtxGetCacheConfig:    ("cuCtxGetCacheConfig",    None,  (),                    "<i",  ("config",)),
+    FN_cuCtxSetCacheConfig:    ("cuCtxSetCacheConfig",    "<i",  ("config",),            None,  ()),
+    FN_cuCtxGetSharedMemConfig:("cuCtxGetSharedMemConfig",None,  (),                    "<i",  ("config",)),
+    FN_cuCtxSetSharedMemConfig:("cuCtxSetSharedMemConfig","<i",  ("config",),            None,  ()),
+    # Kernel / function attributes
+    # Req_cuFuncGetAttribute: {int32 attrib, uint64 func_handle} = 12 B
+    FN_cuFuncGetAttribute:     ("cuFuncGetAttribute",     "<iQ", ("attrib", "func_handle"), "<i", ("value",)),
+    # Req_cuFuncSetAttribute: {uint64 func_handle, int32 attrib, int32 value} = 16 B
+    FN_cuFuncSetAttribute:     ("cuFuncSetAttribute",     "<Qii", ("func_handle", "attrib", "value"), None, ()),
+    # Req_cuFuncSetCacheConfig: {uint64 func_handle, int32 config} = 12 B
+    FN_cuFuncSetCacheConfig:   ("cuFuncSetCacheConfig",   "<Qi", ("func_handle", "config"), None, ()),
+    FN_cuFuncSetSharedMemConfig:("cuFuncSetSharedMemConfig","<Qi",("func_handle", "config"), None, ()),
+    # Req_cuOccupancyMaxActiveBlocksPerMultiprocessor: {uint64 func, int32 blockSize, uint64 dynSmem} = 20 B
+    FN_cuOccupancyMaxActiveBlocksPerMultiprocessor: (
+        "cuOccupancyMaxActiveBlocksPerMultiprocessor",
+        "<QiQ", ("func_handle", "block_size", "dynamic_smem_size"),
+        "<i",   ("num_blocks",),
+    ),
     FN_cuModuleUnload:     ("cuModuleUnload",      "<Q",      ("mod_handle",),                          None,   ()),
     FN_cuStreamCreate:     ("cuStreamCreate",      "<I",      ("flags",),                               "<Q",   ("stream_handle",)),
     FN_cuStreamDestroy:    ("cuStreamDestroy",     "<Q",      ("stream_handle",),                       None,   ()),
@@ -189,6 +247,12 @@ _MEMCPY_HTOD_HDR = struct.Struct("<QQ")  # 16 B
 # Req_cuMemcpyDtoH: {uint64 src, uint64 byte_count}  (response is raw bytes)
 _MEMCPY_DTOH_HDR = struct.Struct("<QQ")  # 16 B
 
+# _Req_HtoDAsync_Hdr: {uint64 dst, uint64 byte_count, uint64 stream_handle} + data bytes
+_MEMCPY_HTOD_ASYNC_HDR = struct.Struct("<QQQ")  # 24 B
+
+# _Req_DtoHAsync_Hdr: {uint64 src, uint64 byte_count, uint64 stream_handle}  (response: raw bytes)
+_MEMCPY_DTOH_ASYNC_HDR = struct.Struct("<QQQ")  # 24 B
+
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
@@ -227,6 +291,17 @@ def decode_req(func_id: int, payload: bytes) -> dict:  # type: ignore[type-arg]
     if func_id == FN_cuMemcpyDtoH:
         src, byte_count = _MEMCPY_DTOH_HDR.unpack_from(payload)
         return {"func": "cuMemcpyDtoH", "src": src, "byte_count": byte_count}
+
+    if func_id == FN_cuMemcpyHtoDAsync:
+        dst, byte_count, stream_handle = _MEMCPY_HTOD_ASYNC_HDR.unpack_from(payload)
+        data = payload[_MEMCPY_HTOD_ASYNC_HDR.size:]
+        return {"func": "cuMemcpyHtoDAsync", "dst": dst,
+                "byte_count": byte_count, "stream_handle": stream_handle, "data": data}
+
+    if func_id == FN_cuMemcpyDtoHAsync:
+        src, byte_count, stream_handle = _MEMCPY_DTOH_ASYNC_HDR.unpack_from(payload)
+        return {"func": "cuMemcpyDtoHAsync", "src": src,
+                "byte_count": byte_count, "stream_handle": stream_handle}
 
     if func_id == FN_cuModuleLoad:
         # The shim reads the PTX/binary file; we send its contents so the
@@ -320,6 +395,12 @@ def encode_resp(func_id: int, cuda_result: int, resp: dict, req: dict) -> bytes:
 
     if func_id == FN_cuMemcpyHtoD:
         return b""  # no output payload
+
+    if func_id == FN_cuMemcpyHtoDAsync:
+        return b""  # no output payload
+
+    if func_id == FN_cuMemcpyDtoHAsync:
+        return resp.get("data", b"")
 
     if func_id == FN_cuMemcpyDtoH:
         # Response payload is the raw device memory bytes.
