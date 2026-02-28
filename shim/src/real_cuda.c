@@ -213,6 +213,8 @@ void real_cuda_init(void *(*bootstrap_dlsym)(void *, const char *)) {
     LOAD(cuEventDestroy);
     LOAD(cuEventRecord);
     LOAD(cuEventSynchronize);
+    // Runtime internal — used as local-driver fallback in cuGetExportTable.
+    LOAD(cuGetExportTable);
 #undef LOAD
 
     SHIM_DEBUG("real_cuda_init: real CUDA fallback %s",

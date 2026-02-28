@@ -320,7 +320,22 @@ void ipc_disconnect(void);
 // Send request + receive response. Thread-safe (internal mutex).
 // Returns the CUresult from the response header.
 // resp_payload may be NULL if resp_payload_max is 0 (no output expected).
+// On timeout: marks the IPC connection dead, returns CUDA_ERROR_NOT_INITIALIZED.
 CUresult ipc_call(
+    uint32_t    func_id,
+    const void *req_payload,
+    uint32_t    req_payload_len,
+    void       *resp_payload,
+    uint32_t    resp_payload_max,
+    uint32_t   *resp_payload_len_out   // may be NULL
+);
+
+// Variant of ipc_call for optional IPC calls where a timeout should not be
+// treated as a fatal connection error.  On timeout: does NOT call ipc_mark_dead();
+// returns CUDA_ERROR_NOT_SUPPORTED so the caller can fall back gracefully.
+// Non-timeout transport errors (broken socket) still mark the connection dead.
+// Use only for functions that have a viable local-driver fallback path.
+CUresult ipc_call_optional(
     uint32_t    func_id,
     const void *req_payload,
     uint32_t    req_payload_len,
@@ -425,6 +440,8 @@ typedef struct {
     CUresult (*cuEventDestroy)(CUevent event);
     CUresult (*cuEventRecord)(CUevent event, CUstream stream);
     CUresult (*cuEventSynchronize)(CUevent event);
+    // Runtime internals with local-driver fallback
+    CUresult (*cuGetExportTable)(const void **ppExportTable, const CUuuid *pExportTableId);
 } RealCuda;
 
 // Global real CUDA function pointer table (defined in real_cuda.c).

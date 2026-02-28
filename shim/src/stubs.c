@@ -731,84 +731,91 @@ CUresult cuGetErrorString(CUresult error, const char **pStr) {
 
 // ── Runtime internals ─────────────────────────────────────────────────────────
 
-// cuGetExportTable — full IPC forwarding implementation.
+// cuGetExportTable — IPC forwarding with local-driver fallback.
 //
 // The CUDA runtime and applications such as ffmpeg call this function at
 // startup to discover internal driver capability tables.  Returning
-// CUDA_ERROR_NOT_SUPPORTED causes the runtime to abort GPU detection, so
-// we must forward the call to the agent and return the real table bytes.
+// CUDA_ERROR_NOT_SUPPORTED causes the runtime to abort GPU detection.
+//
+// Strategy:
+//   1. If IPC is live, try ipc_call_optional() to get the remote agent's
+//      export table.  ipc_call_optional() does not kill the IPC connection
+//      on timeout — a slow agent start is not a broken connection.
+//   2. If IPC is unavailable or times out, fall back to the real local
+//      libcuda.so.1 via g_real.cuGetExportTable.  Local export tables are
+//      valid for local-device contexts and satisfy the runtime's checks.
+//   3. If neither path succeeds, return CUDA_ERROR_NOT_SUPPORTED.
 //
 // The agent serialises the export table as raw 64-bit function pointer
-// values from its own address space.  The shim malloc's a persistent
-// buffer, writes the received pointer values into it, and sets
-// *ppExportTable to that buffer.  The pointers are agent-side virtual
-// addresses and are NOT callable in the sidecar process — they exist
-// solely to satisfy non-NULL presence checks in the CUDA runtime.
+// values from its own address space.  These pointers are agent-side VAs
+// and are NOT callable in the sidecar process — they exist solely to
+// satisfy non-NULL presence checks in the CUDA runtime.
 __attribute__((visibility("default")))
 CUresult cuGetExportTable(const void **ppExportTable, const CUuuid *pExportTableId) {
     if (ppExportTable == NULL || pExportTableId == NULL) {
         return CUDA_ERROR_INVALID_VALUE;
     }
 
-    if (!g_ipc_connected) {
-        // No local CUDA driver fallback for export tables — the sidecar
-        // container has no direct GPU access.
-        return CUDA_ERROR_NOT_SUPPORTED;
+    // ── Path 1: forward to remote agent via IPC ───────────────────────────────
+    if (g_ipc_connected) {
+        Req_cuGetExportTable req;
+        memcpy(req.uuid, pExportTableId->bytes, 16);
+
+        // Response buffer: fixed header + up to EXPORT_TABLE_MAX_ENTRIES pointers.
+        uint8_t resp_buf[sizeof(Resp_cuGetExportTable)
+                         + EXPORT_TABLE_MAX_ENTRIES * sizeof(uint64_t)];
+        uint32_t resp_max = (uint32_t)sizeof(resp_buf);
+        uint32_t resp_len = 0;
+
+        CUresult r = ipc_call_optional(FN_cuGetExportTable, &req, sizeof(req),
+                                       resp_buf, resp_max, &resp_len);
+        if (r == CUDA_SUCCESS) {
+            if (resp_len < sizeof(Resp_cuGetExportTable)) {
+                SHIM_WARN("cuGetExportTable: truncated IPC response (%u bytes)", resp_len);
+                // Fall through to local driver.
+            } else {
+                Resp_cuGetExportTable hdr;
+                memcpy(&hdr, resp_buf, sizeof(hdr));
+                uint32_t entry_count = hdr.entry_count;
+
+                if (entry_count == 0) {
+                    // Empty table: driver supports the UUID but has no entries.
+                    *ppExportTable = (const void *)1;
+                    return CUDA_SUCCESS;
+                }
+
+                uint32_t table_bytes = entry_count * (uint32_t)sizeof(uint64_t);
+                if (resp_len < sizeof(Resp_cuGetExportTable) + table_bytes) {
+                    SHIM_WARN("cuGetExportTable: IPC response too short for %u entries",
+                              entry_count);
+                    // Fall through to local driver.
+                } else {
+                    // Allocate a persistent buffer.  Export tables live for the
+                    // duration of the process — intentionally never freed.
+                    void *table = malloc(table_bytes);
+                    if (table == NULL) return CUDA_ERROR_OUT_OF_MEMORY;
+                    memcpy(table, resp_buf + sizeof(Resp_cuGetExportTable), table_bytes);
+                    *ppExportTable = table;
+                    SHIM_DEBUG("cuGetExportTable: IPC forwarded %u entries "
+                               "for UUID %02x%02x...",
+                               entry_count,
+                               pExportTableId->bytes[0], pExportTableId->bytes[1]);
+                    return CUDA_SUCCESS;
+                }
+            }
+        } else {
+            // Timeout (NOT_SUPPORTED) or other IPC error — try local driver.
+            SHIM_DEBUG("cuGetExportTable: IPC returned %d, falling back to local driver",
+                       (int)r);
+        }
     }
 
-    // Build request: pack the 16-byte UUID.
-    Req_cuGetExportTable req;
-    memcpy(req.uuid, pExportTableId->bytes, 16);
-
-    // Response buffer: fixed header + up to EXPORT_TABLE_MAX_ENTRIES pointers.
-    uint32_t resp_max = (uint32_t)(sizeof(Resp_cuGetExportTable)
-                                   + EXPORT_TABLE_MAX_ENTRIES * sizeof(uint64_t));
-    uint8_t resp_buf[sizeof(Resp_cuGetExportTable)
-                     + EXPORT_TABLE_MAX_ENTRIES * sizeof(uint64_t)];
-
-    uint32_t resp_len = 0;
-    CUresult r = ipc_call(FN_cuGetExportTable, &req, sizeof(req),
-                          resp_buf, resp_max, &resp_len);
-    if (r != CUDA_SUCCESS) {
-        return r;
+    // ── Path 2: local driver fallback ────────────────────────────────────────
+    if (g_real.cuGetExportTable != NULL) {
+        return g_real.cuGetExportTable(ppExportTable, pExportTableId);
     }
 
-    if (resp_len < sizeof(Resp_cuGetExportTable)) {
-        SHIM_WARN("cuGetExportTable: truncated response (%u bytes)", resp_len);
-        return CUDA_ERROR_UNKNOWN;
-    }
-
-    Resp_cuGetExportTable hdr;
-    memcpy(&hdr, resp_buf, sizeof(hdr));
-    uint32_t entry_count = hdr.entry_count;
-
-    if (entry_count == 0) {
-        // Agent returned an empty table: driver supports the UUID but has
-        // no entries.  Return a non-NULL sentinel so the runtime sees success.
-        *ppExportTable = (const void *)1;
-        return CUDA_SUCCESS;
-    }
-
-    uint32_t table_bytes = entry_count * (uint32_t)sizeof(uint64_t);
-    if (resp_len < sizeof(Resp_cuGetExportTable) + table_bytes) {
-        SHIM_WARN("cuGetExportTable: response too short for %u entries", entry_count);
-        return CUDA_ERROR_UNKNOWN;
-    }
-
-    // Allocate a persistent buffer for the table.  Intentionally never freed
-    // — export tables are expected to live for the duration of the process.
-    void *table = malloc(table_bytes);
-    if (table == NULL) {
-        return CUDA_ERROR_OUT_OF_MEMORY;
-    }
-
-    memcpy(table, resp_buf + sizeof(Resp_cuGetExportTable), table_bytes);
-    *ppExportTable = table;
-
-    SHIM_DEBUG("cuGetExportTable: forwarded %u entries for UUID %02x%02x…",
-               entry_count,
-               pExportTableId->bytes[0], pExportTableId->bytes[1]);
-    return CUDA_SUCCESS;
+    return CUDA_ERROR_NOT_SUPPORTED;
 }
 
 // ── Profiler ──────────────────────────────────────────────────────────────────

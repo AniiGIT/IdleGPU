@@ -173,7 +173,15 @@ class IpcServer:
                 writer.write(resp_hdr + resp_payload)
                 await writer.drain()
 
-        except ConnectionResetError:
+        except asyncio.CancelledError:
+            # Task was cancelled (sidecar shutting down or broker disconnected).
+            # Log cleanly and re-raise so asyncio can finish cleanup — swallowing
+            # CancelledError causes "Task was destroyed but it is pending" warnings.
+            logger.warning("ipc_server: connection task cancelled (%s)", peer)
+            raise
+        except (ConnectionResetError, BrokenPipeError):
+            # Shim process exited mid-call (e.g. application crash or IPC timeout
+            # on the shim side).  Expected; no stack trace needed.
             logger.debug("ipc_server: shim disconnected (%s)", peer)
         except Exception as exc:
             logger.error("ipc_server: unexpected error for %s: %s", peer, exc)

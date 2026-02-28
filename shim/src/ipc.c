@@ -150,13 +150,24 @@ static void ipc_mark_dead(void) {
     g_ipc_connected = 0;
 }
 
-CUresult ipc_call(
+// ── Shared IPC call implementation ────────────────────────────────────────────
+//
+// kill_on_timeout:
+//   1 (ipc_call)          — timeout marks the connection dead and returns
+//                           CUDA_ERROR_NOT_INITIALIZED.
+//   0 (ipc_call_optional) — timeout does NOT mark the connection dead; returns
+//                           CUDA_ERROR_NOT_SUPPORTED so the caller can fall back
+//                           gracefully without severing other callers' IPC access.
+//                           Non-timeout errors (broken socket) still mark dead.
+
+static CUresult ipc_call_impl(
     uint32_t    func_id,
     const void *req_payload,
     uint32_t    req_payload_len,
     void       *resp_payload,
     uint32_t    resp_payload_max,
-    uint32_t   *resp_payload_len_out
+    uint32_t   *resp_payload_len_out,
+    int         kill_on_timeout
 ) {
     pthread_mutex_lock(&g_ipc_mutex);
 
@@ -177,9 +188,13 @@ CUresult ipc_call(
     int rc;
     rc = ipc_send_all(s_fd, &req_hdr, sizeof(req_hdr));
     if (rc < 0) {
-        if (rc == -2)
+        if (rc == -2) {
             SHIM_WARN("ipc_call func_id=%u: send timed out after %ld ms",
                       func_id, s_ipc_timeout_ms);
+            if (kill_on_timeout) ipc_mark_dead();
+            pthread_mutex_unlock(&g_ipc_mutex);
+            return CUDA_ERROR_NOT_SUPPORTED;
+        }
         ipc_mark_dead();
         pthread_mutex_unlock(&g_ipc_mutex);
         return CUDA_ERROR_NOT_INITIALIZED;
@@ -188,9 +203,13 @@ CUresult ipc_call(
     if (req_payload_len > 0 && req_payload != NULL) {
         rc = ipc_send_all(s_fd, req_payload, req_payload_len);
         if (rc < 0) {
-            if (rc == -2)
+            if (rc == -2) {
                 SHIM_WARN("ipc_call func_id=%u: send payload timed out after %ld ms",
                           func_id, s_ipc_timeout_ms);
+                if (kill_on_timeout) ipc_mark_dead();
+                pthread_mutex_unlock(&g_ipc_mutex);
+                return CUDA_ERROR_NOT_SUPPORTED;
+            }
             ipc_mark_dead();
             pthread_mutex_unlock(&g_ipc_mutex);
             return CUDA_ERROR_NOT_INITIALIZED;
@@ -202,9 +221,13 @@ CUresult ipc_call(
     IpcRespHeader resp_hdr;
     rc = ipc_recv_all(s_fd, &resp_hdr, sizeof(resp_hdr));
     if (rc < 0) {
-        if (rc == -2)
+        if (rc == -2) {
             SHIM_WARN("ipc_call func_id=%u: recv timed out after %ld ms",
                       func_id, s_ipc_timeout_ms);
+            if (kill_on_timeout) ipc_mark_dead();
+            pthread_mutex_unlock(&g_ipc_mutex);
+            return CUDA_ERROR_NOT_SUPPORTED;
+        }
         ipc_mark_dead();
         pthread_mutex_unlock(&g_ipc_mutex);
         return CUDA_ERROR_NOT_INITIALIZED;
@@ -230,9 +253,13 @@ CUresult ipc_call(
         if (resp_payload != NULL && resp_hdr.payload_len <= resp_payload_max) {
             rc = ipc_recv_all(s_fd, resp_payload, resp_hdr.payload_len);
             if (rc < 0) {
-                if (rc == -2)
+                if (rc == -2) {
                     SHIM_WARN("ipc_call func_id=%u: recv payload timed out after %ld ms",
                               func_id, s_ipc_timeout_ms);
+                    if (kill_on_timeout) ipc_mark_dead();
+                    pthread_mutex_unlock(&g_ipc_mutex);
+                    return CUDA_ERROR_NOT_SUPPORTED;
+                }
                 ipc_mark_dead();
                 pthread_mutex_unlock(&g_ipc_mutex);
                 return CUDA_ERROR_NOT_INITIALIZED;
@@ -245,9 +272,13 @@ CUresult ipc_call(
                 uint32_t chunk = remaining < sizeof(drain) ? remaining : sizeof(drain);
                 rc = ipc_recv_all(s_fd, drain, chunk);
                 if (rc < 0) {
-                    if (rc == -2)
+                    if (rc == -2) {
                         SHIM_WARN("ipc_call func_id=%u: drain timed out after %ld ms",
                                   func_id, s_ipc_timeout_ms);
+                        if (kill_on_timeout) ipc_mark_dead();
+                        pthread_mutex_unlock(&g_ipc_mutex);
+                        return CUDA_ERROR_NOT_SUPPORTED;
+                    }
                     ipc_mark_dead();
                     pthread_mutex_unlock(&g_ipc_mutex);
                     return CUDA_ERROR_NOT_INITIALIZED;
@@ -267,4 +298,30 @@ CUresult ipc_call(
 
     pthread_mutex_unlock(&g_ipc_mutex);
     return (CUresult)resp_hdr.cuda_result;
+}
+
+CUresult ipc_call(
+    uint32_t    func_id,
+    const void *req_payload,
+    uint32_t    req_payload_len,
+    void       *resp_payload,
+    uint32_t    resp_payload_max,
+    uint32_t   *resp_payload_len_out
+) {
+    return ipc_call_impl(func_id, req_payload, req_payload_len,
+                         resp_payload, resp_payload_max, resp_payload_len_out,
+                         /*kill_on_timeout=*/1);
+}
+
+CUresult ipc_call_optional(
+    uint32_t    func_id,
+    const void *req_payload,
+    uint32_t    req_payload_len,
+    void       *resp_payload,
+    uint32_t    resp_payload_max,
+    uint32_t   *resp_payload_len_out
+) {
+    return ipc_call_impl(func_id, req_payload, req_payload_len,
+                         resp_payload, resp_payload_max, resp_payload_len_out,
+                         /*kill_on_timeout=*/0);
 }
